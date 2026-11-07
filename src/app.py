@@ -256,12 +256,14 @@ def models() -> Any | tuple[Any, Literal[502]]:
 @app.get("/api/health")
 def health() -> Any | tuple[Any, Literal[503]]:
     try:
-        return jsonify(
+        resp = jsonify(
             {
                 "status": "ok",
                 "mcp_tools": asyncio.run(main=_list_tools()),
             }
         )
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
     except Exception:
         return (
             jsonify(

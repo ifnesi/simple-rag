@@ -285,12 +285,35 @@
         return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mousedown", onDown); };
       }, []);
 
+      // MCP status: poll every 15 s while connected, every 3 s while not (so the page recovers on its own
+      // when the MCP server finishes starting), and check again as soon as the tab is shown or the network returns.
       useEffect(() => {
-        const check = () =>
-          fetch("/api/health").then(r => setMcp(r.ok ? "ok" : "down")).catch(() => setMcp("down"));
+        let timer, stopped = false;
+        const check = async () => {
+          clearTimeout(timer);
+          let ok = false;
+          try {
+            const ctl = new AbortController();
+            const t = setTimeout(() => ctl.abort(), 8000);
+            const r = await fetch("/api/health", { cache: "no-store", signal: ctl.signal });
+            clearTimeout(t);
+            ok = r.ok;
+          } catch {}
+          if (stopped) return;
+          setMcp(ok ? "ok" : "down");
+          timer = setTimeout(check, ok ? 15000 : 3000);
+        };
+        const onVisible = () => { if (document.visibilityState === "visible") check(); };
         check();
-        const id = setInterval(check, 15000);
-        return () => clearInterval(id);
+        document.addEventListener("visibilitychange", onVisible);
+        window.addEventListener("online", check);
+        window.addEventListener("focus", check);
+        return () => {
+          stopped = true; clearTimeout(timer);
+          document.removeEventListener("visibilitychange", onVisible);
+          window.removeEventListener("online", check);
+          window.removeEventListener("focus", check);
+        };
       }, []);
 
       // What the selected model supports, as reported by Ollama through the MCP server
