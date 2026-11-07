@@ -104,6 +104,8 @@ def _friendly(tool_error: str) -> str:
     t: str = tool_error.lower()
     if "failed to connect" in t or "connection" in t or "timed out" in t:
         return "Could not reach Ollama. Check that it is running and that OLLAMA_URL in src/.env is reachable from the container."
+    if "is not installed in ollama" in t:  # the user picked a model Ollama does not have
+        return tool_error.split("ask_faq: ", 1)[-1]
     if "not found" in t and "model" in t:
         return "Ollama does not have the configured model. Run `ollama pull <model>` for OLLAMA_MODEL in src/.env."
     return "The MCP server could not generate an answer. See `docker-compose logs mcp` for details."
@@ -114,6 +116,7 @@ def ask_via_mcp(
     top_k: int,
     history: list[dict] | None = None,
     on_progress: Any = None,
+    model: str | None = None,
 ) -> dict:
     result: Any = asyncio.run(
         main=_call_tool(
@@ -122,13 +125,18 @@ def ask_via_mcp(
                 "question": question,
                 "top_k": top_k,
                 **({"history": history} if history else {}),
+                **({"model": model} if model else {}),
             },
             on_progress=on_progress,
         )
     )
+    return _parse_result(result)
+
+
+def _parse_result(result: Any) -> dict:
     text: LiteralString = "".join(getattr(c, "text", "") for c in result.content)
     if result.isError:
-        raise ToolError(text or "ask_faq failed")
+        raise ToolError(text or "MCP tool failed")
     data: Any = result.structuredContent or json.loads(s=text)
     return data.get("result", data) if set(data) == {"result"} else data
 
@@ -168,17 +176,18 @@ def ask() -> tuple[Any, Literal[400]] | Any | tuple[Any, Literal[502]]:
         top_k: int = int(data.get("top_k", TOP_K_DEFAULT))
     except (TypeError, ValueError):
         top_k = TOP_K_DEFAULT
+    model: str | None = str(data.get("model") or "").strip()[:200] or None
     session_id: str | None = _valid_session(data.get("session_id"))
     history: list[dict] = _get_history(session_id)
 
     if data.get("stream"):
         return Response(
-            stream_with_context(_stream_answer(question, top_k, history, session_id)),
+            stream_with_context(_stream_answer(question, top_k, history, session_id, model)),
             mimetype="application/x-ndjson",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     try:
-        result: dict = ask_via_mcp(question, top_k=top_k, history=history)
+        result: dict = ask_via_mcp(question, top_k=top_k, history=history, model=model)
         _remember(session_id, question, result)
         return jsonify(result)
     except ToolError as e:
@@ -189,7 +198,9 @@ def ask() -> tuple[Any, Literal[400]] | Any | tuple[Any, Literal[502]]:
         return jsonify({"error": "could not get an answer from the MCP server"}), 502
 
 
-def _stream_answer(question: str, top_k: int, history: list[dict], session_id: str | None) -> Any:
+def _stream_answer(
+    question: str, top_k: int, history: list[dict], session_id: str | None, model: str | None
+) -> Any:
     """Yield one JSON object per line: {"type":"status","text"} for each step the MCP server reports,
     then {"type":"result",...} or {"type":"error","error"}. The MCP call runs in a thread and hands its
     events over through a queue."""
@@ -201,6 +212,7 @@ def _stream_answer(question: str, top_k: int, history: list[dict], session_id: s
                 question,
                 top_k=top_k,
                 history=history,
+                model=model,
                 on_progress=lambda m: events.put({"type": "status", "text": m}),
             )
             _remember(session_id, question, result)
@@ -218,6 +230,16 @@ def _stream_answer(question: str, top_k: int, history: list[dict], session_id: s
         yield json.dumps(event) + "\n"
         if event["type"] != "status":
             return
+
+
+@app.get("/api/models")
+def models() -> Any | tuple[Any, Literal[502]]:
+    """The Ollama models the user can pick, and the server's default (from the MCP `list_models` tool)."""
+    try:
+        return jsonify(_parse_result(asyncio.run(main=_call_tool(name="list_models", args={}))))
+    except Exception:
+        log.exception(msg="list_models via MCP failed")
+        return jsonify({"error": "could not list the Ollama models"}), 502
 
 
 @app.get("/api/health")

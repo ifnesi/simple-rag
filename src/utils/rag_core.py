@@ -80,6 +80,34 @@ def _check_ollama() -> None:
         log.info(msg=f"ollama ok: {OLLAMA_MODEL} at {OLLAMA_URL}")
 
 
+# Models that only produce embeddings cannot answer questions: keep them out of the picker
+_NOT_CHAT_MODEL: Pattern[str] = re.compile(r"embed|bge|minilm|rerank", re.I)
+
+
+def _installed_models() -> list[str]:
+    return sorted(m.model for m in client.list().models)
+
+
+def list_models() -> Dict[str, object]:
+    """The models Ollama has pulled (chat-capable ones) and the default from OLLAMA_MODEL."""
+    names: list[str] = [n for n in _installed_models() if not _NOT_CHAT_MODEL.search(n)]
+    return {"default": OLLAMA_MODEL, "models": names}
+
+
+def _resolve_model(model: str | None) -> str:
+    """The model to use: the default for none, otherwise one Ollama has pulled. An unknown name is an
+    error (not a silent fallback), so the caller knows its choice was not used."""
+    model = (model or "").strip()
+    if not model or model == OLLAMA_MODEL:
+        return OLLAMA_MODEL
+    names: list[str] = _installed_models()
+    if model in names or f"{model}:latest" in names:
+        return model
+    raise ValueError(
+        f"Model '{model}' is not installed in Ollama. Installed: {', '.join(names) or 'none'}"
+    )
+
+
 # ---------------- Chunking and ids ----------------
 _ENTRY_START: Pattern[str] = re.compile(
     r"(?m)^(?=Q:|## )"
@@ -230,6 +258,7 @@ def _split_question(
     q: str,
     history: List[Dict[str, str]] | None = None,
     on_step: Callable[[str], None] | None = None,
+    model: str = OLLAMA_MODEL,
 ) -> List[str]:
     """Turn the user's message into standalone questions, one per topic.
 
@@ -260,7 +289,7 @@ def _split_question(
             )
             content = q
         resp = client.chat(
-            model=OLLAMA_MODEL,
+            model=model,
             options={
                 "temperature": TEMPERATURE,
             },
@@ -292,9 +321,10 @@ def _split_question(
 def _generate_answer(
     context: str,
     question: str,
+    model: str = OLLAMA_MODEL,
 ) -> str:
     resp = client.chat(
-        model=OLLAMA_MODEL,
+        model=model,
         options={
             "temperature": TEMPERATURE,
         },
@@ -327,15 +357,18 @@ def ask_faq_core(
     top_k: int = TOP_K_DEFAULT,
     history: List[Dict[str, str]] | None = None,
     on_step: Callable[[str], None] | None = None,
+    model: str | None = None,
 ) -> Dict[str, object]:
-    """Answer a question from the FAQs. `on_step`, if given, is called with a short message before each
+    """Answer a question from the FAQs. `model` overrides OLLAMA_MODEL for this call (it must be installed
+    in Ollama, otherwise ValueError). `on_step`, if given, is called with a short message before each
     stage (the MCP tool turns these into progress notifications); it must not raise."""
     q: str = (question or "").strip()
     if not q:
         raise ValueError("question is required")
+    chat_model: str = _resolve_model(model)
 
     # top_k chunks for each sub-question; a chunk found by several of them is kept once
-    questions: List[str] = _split_question(q, history=history, on_step=on_step)
+    questions: List[str] = _split_question(q, history=history, on_step=on_step, model=chat_model)
     if len(questions) > 1 or questions != [q]:
         log.info(msg=f"[split] {questions}")
     # With history, the user's message may be a follow-up that means nothing alone: answer the rewrite
@@ -370,12 +403,13 @@ def ask_faq_core(
             sources.append(h.payload["source"])
 
     if on_step:
-        on_step(f"Generating the answer with {OLLAMA_MODEL}")
+        on_step(f"Generating the answer with {chat_model}")
     # No filenames in the context: the model cannot repeat what it never sees
     context: LiteralString = "\n\n---\n\n".join(h.payload["text"] for h in hits)
     answer: str = _generate_answer(
         context,
         question=standalone,
+        model=chat_model,
     )
     if answer.strip() == NOT_FOUND:
         sources: List[str] = []  # nothing relevant was found, so do not cite files

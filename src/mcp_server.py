@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from utils import MCP_HOST, MCP_PORT, MCP_TRANSPORT, TOP_K_DEFAULT
 
 # Importing rag_core loads the FAQ files into the in-memory Qdrant (once, at startup)
-from utils.rag_core import ask_faq_core
+from utils.rag_core import ask_faq_core, list_models as list_models_core
 
 # MCP_TRANSPORT is "stdio" (a client launches this process, as instructions.txt requires) or
 # "streamable-http" (long-running server on MCP_PORT, reachable by the web backend and by Claude).
@@ -17,7 +17,7 @@ mcp: Any = FastMCP(
     "faq-rag",
     host=MCP_HOST,
     port=MCP_PORT,
-    stateless_http=True,  # one tool, no server-initiated messages: no sessions to keep (ignored by stdio)
+    stateless_http=True,  # no server-initiated messages: no sessions to keep (ignored by stdio)
     # DNS-rebinding protection stays on; list the Host headers we expect.
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
@@ -40,10 +40,12 @@ async def ask_faq(
     question: str,
     top_k: int = TOP_K_DEFAULT,
     history: Optional[List[Dict[str, str]]] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, object]:
     """Answer a question from the FAQ corpus. Returns the answer and the source files it came from.
     `history` is optional: earlier {"question", "answer"} pairs of the conversation, oldest first, used
-    only to understand follow-up questions. While it works, the tool sends standard MCP progress
+    only to understand follow-up questions. `model` is optional: an Ollama model from `list_models`
+    (default: the server's OLLAMA_MODEL); an unknown model is an error. While it works, the tool sends standard MCP progress
     notifications (and log messages) describing each step, for clients that ask for them."""
     q: str = (question or "").strip()
     if not q:
@@ -71,8 +73,15 @@ async def ask_faq(
             top_k=top_k if top_k > 0 and top_k <= 10 else TOP_K_DEFAULT,
             history=history,
             on_step=on_step,
+            model=model,
         )
     )
+
+
+@mcp.tool()
+def list_models() -> Dict[str, object]:
+    """List the Ollama models `ask_faq` can use. Returns {"default": "<model>", "models": ["<model>", ...]}."""
+    return list_models_core()
 
 
 if __name__ == "__main__":

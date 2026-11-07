@@ -5,7 +5,7 @@ A minimal RAG system that answers questions from the markdown files in `src/faqs
 - **Vector DB:** the `qdrant-client` Python library, in memory (no Qdrant server)
 - **Embeddings:** local, `fastembed` (`BAAI/bge-small-en-v1.5`), baked into the Docker image
 - **Answers:** a model served by [Ollama](https://ollama.com), running on your machine
-- **MCP server:** one tool, `ask_faq`. It owns the vector DB and is the only way to reach it
+- **MCP server:** two tools, `ask_faq` and `list_models`. It owns the vector DB and is the only way to reach it
 - **Web UI:** a static React page served by Flask. Flask talks to the MCP server like any other MCP client and never touches the DB
 - **Loading:** the FAQ files are read, chunked and embedded once, when the MCP server starts
 
@@ -87,7 +87,7 @@ Then ask Claude something about the FAQs; it will call the `ask_faq` tool.
 ```
 The `-e MCP_TRANSPORT=stdio` matters: the container is configured for HTTP, and this overrides it for this one process. The stack must already be running. Each stdio connection starts its own copy of the index, so allow a couple of seconds on first use.
 
-**Tool contract:** `ask_faq(question: str, top_k: int = 4)` (`top_k` 1–10) also takes an optional `history` (earlier `{"question", "answer"}` pairs, oldest first) and returns exactly `{"answer": "...", "sources": ["file.md", ...]}`.
+**Tool contract:** `ask_faq(question: str, top_k: int = 4)` (`top_k` 1–10) also takes an optional `model` (an installed Ollama model; default `OLLAMA_MODEL`, an unknown one is an error) and an optional `history` (earlier `{"question", "answer"}` pairs, oldest first) and returns exactly `{"answer": "...", "sources": ["file.md", ...]}`.
 
 ## Project layout
 ```
@@ -152,6 +152,9 @@ At startup the server checks that Ollama is reachable and the model is pulled, a
 | `GET /docs/<file>` | files from `docs/`, which the Dockerfile copies into the web image; the UI uses it for the architecture diagram. Paths that try to leave the folder return `404` |
 
 The UI is a single `index.html` with React, `marked` and `DOMPurify` from a CDN (no build step, so it needs internet once for the scripts). It is a full-width, chat-style page: conversation history, clickable example questions on the empty state, a typing indicator with the current step, a collapsed **Steps** list under each answer, answers rendered from Markdown to sanitized HTML, source filenames as chips under each answer, a `top_k` selector, a Clear button (which also starts a new chat memory), and a badge that shows whether the backend can reach the MCP server. When it can, the badge reads "MCP connected ↗" and opens the MCP Inspector (port 6274 of the same host) in a new tab. An **Architecture diagram** button to the right of that badge opens a popup with `docs/system_architecture_diagram.png`; Esc, the ✕ button or a click outside the popup closes it, and "Open full size" shows the image in a new tab. The button works even when the MCP server is down. It follows the system light or dark theme and works on narrow screens.
+
+### Choosing the Ollama model
+`OLLAMA_MODEL` in `src/.env` stays the default. The page shows a model dropdown (next to `top k`) filled from `GET /api/models`, which calls the MCP tool `list_models` (returns `{"default": "...", "models": [...]}`: the models Ollama has pulled, minus names that look like embedding-only models). The choice is saved in the browser and sent as `model` with each question; picking the default sends nothing. `ask_faq` accepts only an installed model and returns a clear error for any other, rather than silently using the default. The same model is used for both model calls (the question rewrite and the answer); retrieval always uses the local embedding model, so it does not change. The first request with a model Ollama has not loaded yet is slower (`OLLAMA_TIMEOUT` applies). There is no authentication, so anyone who can open the page can run any installed model: fine on localhost, think twice before exposing it. The "Generating the answer with …" progress step shows which model is used.
 
 ### Chat memory (follow-up questions)
 

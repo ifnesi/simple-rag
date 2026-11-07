@@ -170,6 +170,9 @@
       const [messages, setMessages] = useState([]);
       const [question, setQuestion] = useState("");
       const [topK, setTopK] = useState(4);
+      // Ollama models the user can pick. "" means the server default (OLLAMA_MODEL in .env).
+      const [models, setModels] = useState({ default: "", models: [] });
+      const [model, setModel] = useState(() => { try { return localStorage.getItem("model") || ""; } catch { return ""; } });
       const [loading, setLoading] = useState(false);
       const [steps, setSteps] = useState([]);  // what the backend reports while a question is running
       const [mcp, setMcp] = useState("checking");
@@ -193,6 +196,21 @@
         return () => clearInterval(id);
       }, []);
 
+      // Load the model list once the MCP server is reachable; forget a saved model that is gone
+      useEffect(() => {
+        if (mcp !== "ok" || models.models.length) return;
+        fetch("/api/models").then(r => r.ok ? r.json() : null).then(d => {
+          if (!d || !d.models) return;
+          setModels(d);
+          setModel(m => (m && d.models.includes(m) ? m : ""));
+        }).catch(() => {});
+      }, [mcp]);
+
+      function pickModel(m) {
+        setModel(m);
+        try { localStorage.setItem("model", m); } catch {}
+      }
+
       useEffect(() => { endRef.current && endRef.current.scrollIntoView({ behavior: "smooth" }); },
                 [messages, loading]);
 
@@ -206,7 +224,7 @@
           const r = await fetch("/api/ask", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: q, top_k: topK, session_id: sessionId.current, stream: true }),
+            body: JSON.stringify({ question: q, top_k: topK, session_id: sessionId.current, stream: true, ...(model ? { model } : {}) }),
           });
           if (!r.ok) {
             const data = await r.json().catch(() => ({}));
@@ -299,6 +317,14 @@
           <form onSubmit={e => { e.preventDefault(); send(question); }}>
             <input type="text" value={question} onChange={e => setQuestion(e.target.value)}
                    placeholder="Ask about authentication, SSO, HR policies…" autoFocus />
+            {models.models.length > 0 && (
+              <select value={model || models.default} onChange={e => pickModel(e.target.value === models.default ? "" : e.target.value)}
+                      title="Ollama model used to answer (the default comes from OLLAMA_MODEL)">
+                {[...new Set([models.default, ...models.models])].filter(Boolean).map(n => (
+                  <option key={n} value={n}>{n}{n === models.default ? " (default)" : ""}</option>
+                ))}
+              </select>
+            )}
             <select value={topK} onChange={e => setTopK(Number(e.target.value))} title="Number of chunks to retrieve (top_k)">
               {[...Array(10)].map((_, i) => <option key={i + 1} value={i + 1}>top {i + 1}</option>)}
             </select>
