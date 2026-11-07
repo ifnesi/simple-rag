@@ -5,108 +5,158 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FAQ Assistant</title>
   <style>
+    /* Palette taken from glean.com's published design tokens: electric blue, bright green, canvas greys.
+       The font is the system stack (Glean's own typeface is proprietary). */
     :root {
-      --bg: #f4f5f8; --panel: #ffffff; --text: #1b1f27; --muted: #6a7282; --border: #e3e6ec;
-      --accent: #4f46e5; --accent-soft: #eef0ff; --user-bg: #4f46e5; --user-text: #ffffff;
-      --chip-bg: #f0f2f6; --ok: #16a34a; --bad: #dc2626; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
+      --bg: #f4f4f6; --panel: #ffffff; --raised: #e9e9ec; --nested: #d8d9de;
+      --text: #272834; --muted: #4f5064; --faint: #8b8c9c; --border: rgba(0, 0, 0, .10); --border-strong: rgba(0, 0, 0, .20);
+      --accent: #343ced; --accent-hover: #131bd4; --accent-text: #343ced; --accent-soft: #e2e3fb; --on-accent: #ffffff;
+      --lime: #d8fd49; --on-lime: #1d1d1d;
+      --ok: #00b207; --bad: #c8321e; --shadow: 0 1px 2px rgba(12, 15, 26, .06), 0 12px 32px rgba(12, 15, 26, .08);
+      --radius: 16px; --radius-sm: 8px;
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #0f1218; --panel: #171b24; --text: #e8ebf2; --muted: #98a2b3; --border: #272d3a;
-        --accent: #818cf8; --accent-soft: #1e2250; --user-bg: #4f46e5; --user-text: #ffffff;
-        --chip-bg: #212736; --ok: #4ade80; --bad: #f87171; --shadow: none;
+        --bg: #0c0f1a; --panel: #131120; --raised: #1c1a2e; --nested: #2a2842;
+        --text: #ececf4; --muted: #b4b5c8; --faint: #8b8c9c; --border: rgba(255, 255, 255, .10); --border-strong: rgba(255, 255, 255, .22);
+        --accent: #5d63f1; --accent-hover: #7a7ff4; --accent-text: #999df6; --accent-soft: #1d1f55; --on-accent: #ffffff;
+        --ok: #54d848; --bad: #ff8a78; --shadow: none;
       }
     }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-    .app { width: 100%; height: 100vh; padding: 20px 28px; display: flex; flex-direction: column; gap: 14px; }
+    html, body { height: 100%; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    button, select, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    :focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+    svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
-    header { display: flex; align-items: center; gap: 12px; }
-    .logo { width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(135deg, #6366f1, #8b5cf6);
-            display: grid; place-items: center; color: #fff; font-size: 20px; flex: none; }
-    header h1 { font-size: 1.1rem; margin: 0; line-height: 1.2; }
-    header p { margin: 0; color: var(--muted); font-size: .85rem; }
+    .app { height: 100vh; display: flex; flex-direction: column; }
+    .col { width: 100%; padding: 0 28px; }  /* full browser width */
+
+    /* ---- header ---- */
+    header { border-bottom: 1px solid var(--border); background: var(--panel); position: relative; z-index: 20; }
+    .head { display: flex; align-items: center; gap: 12px; padding: 12px 28px; }
+    .mark { width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: var(--lime);
+            display: grid; place-items: center; flex: none; }
+    .mark svg { width: 20px; height: 20px; fill: currentColor; stroke: none; }
+    header h1 { font-size: 1rem; font-weight: 650; margin: 0; line-height: 1.2; letter-spacing: -.01em; }
+    header p { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.3; }
     .spacer { flex: 1; }
-    .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border);
-             border-radius: 999px; font-size: .78rem; color: var(--muted); background: var(--panel); white-space: nowrap; }
-    a.badge { text-decoration: none; cursor: pointer; }
-    a.badge:hover { color: var(--text); border-color: var(--accent); }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-    .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
-    .ghost { border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 999px;
-             padding: 4px 12px; font-size: .78rem; cursor: pointer; }
-    .ghost:hover { color: var(--text); }
-    a.ghost { text-decoration: none; }
-    button.badge { font: inherit; font-size: .78rem; cursor: pointer; }
-    button.badge:hover { color: var(--text); border-color: var(--accent); }
+    .actions { display: flex; align-items: center; gap: 4px; }
+    .status { display: inline-flex; align-items: center; gap: 7px; font-size: .8rem; color: var(--muted); padding: 0 10px; white-space: nowrap; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+    .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+    .dot.bad { background: var(--bad); }
+    .btn { display: inline-flex; align-items: center; gap: 7px; border: 1px solid transparent; background: transparent; color: var(--muted);
+           padding: 7px 10px; border-radius: var(--radius-sm); font-size: .85rem; text-decoration: none; }
+    .btn:hover { background: var(--raised); color: var(--text); }
+    .btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent-text); }
+    .btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
 
-    .modal-backdrop { position: fixed; inset: 0; background: rgba(8, 10, 16, .6); display: flex;
-                      align-items: center; justify-content: center; padding: 24px; z-index: 50; }
-    .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; width: min(1200px, 100%);
-             max-height: 100%; display: flex; flex-direction: column; overflow: hidden;
-             box-shadow: 0 20px 60px rgba(0, 0, 0, .35); }
-    .modal-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+    /* ---- settings popover ---- */
+    .settings-wrap { position: relative; }
+    .popover { position: absolute; right: 0; top: calc(100% + 8px); width: 320px; background: var(--panel); border: 1px solid var(--border-strong);
+               border-radius: var(--radius); box-shadow: var(--shadow), 0 20px 50px rgba(0, 0, 0, .18); padding: 14px 16px 16px; z-index: 30; }
+    .popover h2 { margin: 0 0 10px; font-size: .95rem; }
+    .field { margin-bottom: 12px; }
+    .field label { display: block; font-size: .8rem; font-weight: 600; margin-bottom: 4px; }
+    .field select { width: 100%; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+                    background: var(--panel); font-size: .88rem; }
+    .field select:disabled { color: var(--faint); background: var(--raised); }
+    .hint { margin: 4px 0 0; font-size: .74rem; color: var(--faint); line-height: 1.4; }
+    .pop-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+    .link { border: 0; background: none; color: var(--accent-text); font-size: .82rem; padding: 4px 0; }
+    .link:hover { text-decoration: underline; }
+
+    /* ---- thread ---- */
+    .thread-scroll { flex: 1; overflow-y: auto; }
+    .thread { display: flex; flex-direction: column; gap: 22px; padding-top: 24px; padding-bottom: 24px; min-height: 100%; }
+
+    .empty { margin: auto; text-align: center; padding: 24px 0; }
+    .empty .mark { margin: 0 auto 16px; width: 48px; height: 48px; border-radius: 14px; }
+    .empty .mark svg { width: 26px; height: 26px; }
+    .empty h2 { margin: 0 0 6px; font-size: 1.5rem; letter-spacing: -.02em; }
+    .empty p { margin: 0 0 24px; color: var(--muted); }
+    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; text-align: left; }
+    .card { border: 1px solid var(--border); background: var(--panel); padding: 14px 16px; border-radius: 12px; font-size: .9rem; line-height: 1.4; }
+    .card:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+    .row { display: flex; gap: 12px; }
+    .row.user { justify-content: flex-end; }
+    .user .bubble { background: var(--accent); color: var(--on-accent); padding: 10px 16px; border-radius: 18px 18px 4px 18px; max-width: 80%; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .avatar { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: var(--lime); display: grid; place-items: center; flex: none; margin-top: 2px; }
+    .avatar svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
+    .answer { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+    .answer.error { color: var(--bad); border: 1px solid var(--bad); border-radius: var(--radius-sm); padding: 8px 12px; flex: 0 1 auto; }
+
+    .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+    .md p { margin: 0 0 10px; }
+    .md h1, .md h2, .md h3, .md h4 { margin: 16px 0 6px; line-height: 1.3; }
+    .md h1 { font-size: 1.2rem; } .md h2 { font-size: 1.1rem; } .md h3, .md h4 { font-size: 1rem; }
+    .md ul, .md ol { margin: 0 0 10px; padding-left: 22px; }
+    .md li { margin: 3px 0; } .md li > p { margin: 0; }
+    .md code { background: var(--raised); border-radius: 4px; padding: 1px 5px; font: .88em ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .md pre { background: var(--raised); border-radius: var(--radius-sm); padding: 10px 12px; overflow-x: auto; }
+    .md pre code { padding: 0; background: none; }
+    .md a { color: var(--accent-text); }
+    .md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
+    .md table { border-collapse: collapse; margin-bottom: 10px; }
+    .md th, .md td { border: 1px solid var(--border-strong); padding: 4px 8px; }
+
+    .meta { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: .78rem; color: var(--muted); }
+    .src { display: inline-flex; align-items: center; gap: 5px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+           padding: 2px 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .74rem; }
+    .src svg { width: 12px; height: 12px; }
+    .icon-btn { border: 0; background: none; color: var(--faint); padding: 4px 6px; border-radius: 6px; display: inline-flex; align-items: center; gap: 5px; font-size: .78rem; }
+    .icon-btn:hover { background: var(--raised); color: var(--text); }
+    .steps { margin-top: 10px; font-size: .8rem; color: var(--muted); }
+    .steps summary { cursor: pointer; user-select: none; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+    .steps summary::-webkit-details-marker { display: none; }
+    .steps summary::before { content: "▸"; font-size: .7rem; transition: transform .15s; }
+    .steps[open] summary::before { transform: rotate(90deg); }
+    .steps ol { list-style: none; margin: 8px 0 0; padding: 0 0 0 4px; border-left: 2px solid var(--border); }
+    .steps li { padding: 2px 0 2px 12px; }
+
+    .thinking { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .88rem; }
+    .typing { display: inline-flex; gap: 4px; }
+    .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-text); animation: blink 1.2s infinite ease-in-out; }
+    .typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
+    @keyframes blink { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+    /* ---- composer ---- */
+    .dock { background: linear-gradient(to bottom, transparent, var(--bg) 24px); padding-bottom: 20px; }
+    .summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .chip { border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 999px; padding: 2px 10px; font-size: .75rem; }
+    .chip:hover { border-color: var(--accent); color: var(--text); }
+    .chip.changed { background: var(--lime); border-color: var(--lime); color: var(--on-lime); font-weight: 600; }
+    .composer { display: flex; align-items: flex-end; gap: 8px; background: var(--panel); border: 1px solid var(--border-strong);
+                border-radius: var(--radius); padding: 8px 8px 8px 16px; box-shadow: var(--shadow); }
+    .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .composer textarea { flex: 1; border: 0; outline: 0; resize: none; background: transparent; padding: 6px 0; max-height: 160px; line-height: 1.5; }
+    .composer textarea::placeholder { color: var(--faint); }
+    .send { width: 38px; height: 38px; border: 0; border-radius: 10px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; flex: none; }
+    .send:hover:not(:disabled) { background: var(--accent-hover); }
+    .send:disabled { background: var(--raised); color: var(--faint); cursor: default; }
+    .send svg { width: 18px; height: 18px; }
+
+    /* ---- diagram modal ---- */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(8, 10, 16, .6); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 50; }
+    .modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); width: min(1200px, 100%); max-height: 100%;
+             display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0, 0, 0, .35); }
+    .modal-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
     .modal-body { padding: 12px; overflow: auto; background: #fff; } /* white: the diagram is drawn on white */
     .modal-body img { display: block; width: 100%; height: auto; }
     .modal-body p { margin: 0; padding: 24px; color: #555; text-align: center; }
 
-    .thread { flex: 1; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
-              box-shadow: var(--shadow); padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-
-    .empty { margin: auto; text-align: center; max-width: 460px; }
-    .empty .big { font-size: 2rem; }
-    .empty h2 { margin: 6px 0 4px; font-size: 1.15rem; }
-    .empty p { margin: 0 0 16px; color: var(--muted); }
-    .suggestions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-    .suggestion { border: 1px solid var(--border); background: var(--chip-bg); color: var(--text); padding: 8px 14px;
-                  border-radius: 999px; font-size: .88rem; cursor: pointer; }
-    .suggestion:hover { border-color: var(--accent); color: var(--accent); }
-
-    .row { display: flex; gap: 10px; max-width: 100%; }
-    .row.user { justify-content: flex-end; }
-    .avatar { width: 28px; height: 28px; border-radius: 8px; background: var(--accent-soft); color: var(--accent);
-              display: grid; place-items: center; font-size: 14px; flex: none; margin-top: 2px; }
-    .bubble { padding: 10px 14px; border-radius: 14px; max-width: 85%; overflow-wrap: anywhere; }
-    .user .bubble { background: var(--user-bg); color: var(--user-text); border-bottom-right-radius: 4px; }
-    .assistant .bubble { background: var(--chip-bg); border-top-left-radius: 4px; }
-    .assistant .bubble.error { background: transparent; border: 1px solid var(--bad); color: var(--bad); }
-    .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
-    .md p { margin: 0 0 8px; }
-    .md h1, .md h2, .md h3, .md h4 { margin: 14px 0 6px; line-height: 1.3; }
-    .md h1 { font-size: 1.2rem; } .md h2 { font-size: 1.1rem; } .md h3, .md h4 { font-size: 1rem; }
-    .md ul, .md ol { margin: 0 0 8px; padding-left: 22px; }
-    .md li { margin: 3px 0; } .md li > p { margin: 0; }
-    .md code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
-               font: .88em ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .md pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
-    .md pre code { border: 0; padding: 0; background: none; }
-    .md a { color: var(--accent); }
-    .md blockquote { margin: 0 0 8px; padding-left: 12px; border-left: 3px solid var(--border); color: var(--muted); }
-    .md table { border-collapse: collapse; margin-bottom: 8px; }
-    .md th, .md td { border: 1px solid var(--border); padding: 4px 8px; }
-    .sources { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: .78rem; color: var(--muted); }
-    .src { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px;
-           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); }
-
-    .opts { display: flex; gap: 8px; flex-wrap: wrap; }
-    .steps { margin-top: 10px; font-size: .8rem; color: var(--muted); }
-    .steps summary { cursor: pointer; user-select: none; }
-    .steps ol { margin: 6px 0 0; padding-left: 20px; }
-    .status { margin-left: 8px; font-size: .85rem; color: var(--muted); vertical-align: middle; }
-    .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
-    .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite ease-in-out; }
-    .typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
-    @keyframes blink { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
-
-    form { display: flex; gap: 8px; align-items: center; background: var(--panel); border: 1px solid var(--border);
-           border-radius: 16px; padding: 8px; box-shadow: var(--shadow); }
-    form:focus-within { border-color: var(--accent); }
-    input[type=text] { flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; padding: 8px 10px; }
-    select { border: 1px solid var(--border); background: var(--chip-bg); color: var(--muted); border-radius: 10px; padding: 8px 8px; font: inherit; font-size: .85rem; }
-    .send { border: 0; background: var(--accent); color: #fff; border-radius: 10px; padding: 9px 18px; font: inherit; font-weight: 600; cursor: pointer; }
-    .send:disabled { opacity: .45; cursor: default; }
-    footer { text-align: center; color: var(--muted); font-size: .76rem; }
-    @media (max-width: 520px) { .app { padding: 14px 12px; } select { display: none; } .bubble { max-width: 92%; } }
+    @media (max-width: 640px) {
+      .col { padding: 0 14px; } .head { padding: 10px 14px; }
+      .btn .label, header p { display: none; }
+      .cards { grid-template-columns: 1fr; }
+      .user .bubble { max-width: 92%; }
+      /* settings become a bottom sheet */
+      .popover { position: fixed; left: 0; right: 0; top: auto; bottom: 0; width: auto; border-radius: var(--radius) var(--radius) 0 0; padding-bottom: 24px; }
+    }
   </style>
 </head>
 <body>
@@ -126,11 +176,35 @@
       "What is the unlimited PTO policy?",
       "How does equity vesting work?",
     ];
+    const DEFAULT_TOP_K = 4;
+    // 131072 -> "128K". Context sizes are multiples of 1024; anything else is shown as a plain integer.
+    const fmtCtx = n => (n % 1024 === 0 ? `${n / 1024}K` : String(n));
+
+    // ---- icons (inline SVG, no dependencies) ----
+    const Icon = ({ children, ...p }) => <svg viewBox="0 0 24 24" aria-hidden="true" {...p}>{children}</svg>;
+    const Spark = () => <Icon><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z" /></Icon>;
+    const IconGear = () => <Icon><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></Icon>;
+    const IconSend = () => <Icon><path d="M12 19V5M5 12l7-7 7 7" /></Icon>;
+    const IconCopy = () => <Icon><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></Icon>;
+    const IconCheck = () => <Icon><path d="M20 6L9 17l-5-5" /></Icon>;
+    const IconFile = () => <Icon><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></Icon>;
+    const IconDiagram = () => <Icon><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /><path d="M10 6.5h4a3 3 0 0 1 3 3V14" /></Icon>;
+    const IconExternal = () => <Icon><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></Icon>;
+    const IconClear = () => <Icon><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></Icon>;
 
     // The model answers in Markdown: convert to HTML, then sanitize it before inserting into the page.
     function Markdown({ text }) {
       const html = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }));
       return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
+    }
+
+    function CopyButton({ text }) {
+      const [done, setDone] = useState(false);
+      const copy = () => {
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(() => {});
+      };
+      return <button className="icon-btn" onClick={copy} aria-label="Copy answer">{done ? <IconCheck /> : <IconCopy />}{done ? "Copied" : "Copy"}</button>;
     }
 
     function Message({ m }) {
@@ -139,19 +213,21 @@
       }
       return (
         <div className="row assistant">
-          <div className="avatar">✦</div>
-          <div className={"bubble" + (m.error ? " error" : "")}>
+          <div className="avatar"><Spark /></div>
+          <div className={"answer" + (m.error ? " error" : "")}>
             {m.error ? m.text : <Markdown text={m.text} />}
+            {!m.error && (
+              <div className="meta">
+                {m.sources && m.sources.map(s => <span className="src" key={s}><IconFile />{s}</span>)}
+                <span className="spacer" />
+                <CopyButton text={m.text} />
+              </div>
+            )}
             {m.steps && m.steps.length > 0 && (
               <details className="steps">
                 <summary>Steps ({m.steps.length})</summary>
                 <ol>{m.steps.map((t, i) => <li key={i}>{t}</li>)}</ol>
               </details>
-            )}
-            {m.sources && m.sources.length > 0 && (
-              <div className="sources">
-                Sources {m.sources.map(s => <span className="src" key={s}>{s}</span>)}
-              </div>
             )}
           </div>
         </div>
@@ -166,28 +242,38 @@
         : "s" + Math.random().toString(36).slice(2) + Date.now().toString(36);
     }
 
+    const saved = k => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
+    const remember = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+
     function App() {
       const sessionId = useRef(newSessionId());
       const [messages, setMessages] = useState([]);
       const [question, setQuestion] = useState("");
-      const [topK, setTopK] = useState(4);
+      const [topK, setTopK] = useState(DEFAULT_TOP_K);
       // Ollama models the user can pick. "" means the server default (OLLAMA_MODEL in .env).
       const [models, setModels] = useState({ default: "", models: [], details: {} });
-      const [model, setModel] = useState(() => { try { return localStorage.getItem("model") || ""; } catch { return ""; } });
+      const [model, setModel] = useState(() => saved("model"));
+      // Thinking effort and context window ("" = the model's / server's default), remembered in the browser
+      const [effort, setEffort] = useState(() => saved("effort"));
+      const [numCtx, setNumCtx] = useState(() => saved("num_ctx"));
       const [loading, setLoading] = useState(false);
       const [steps, setSteps] = useState([]);  // what the backend reports while a question is running
       const [mcp, setMcp] = useState("checking");
-      const endRef = useRef(null);
+      const [showSettings, setShowSettings] = useState(false);
       const [showDiagram, setShowDiagram] = useState(false);
       const [diagramFailed, setDiagramFailed] = useState(false);
+      const endRef = useRef(null);
+      const taRef = useRef(null);
+      const settingsRef = useRef(null);
 
-      // Esc closes the architecture diagram popup
+      // Esc closes the diagram popup and the settings; a click outside closes the settings
       useEffect(() => {
-        if (!showDiagram) return;
-        const onKey = e => { if (e.key === "Escape") setShowDiagram(false); };
+        const onKey = e => { if (e.key === "Escape") { setShowDiagram(false); setShowSettings(false); } };
+        const onDown = e => { if (settingsRef.current && !settingsRef.current.contains(e.target)) setShowSettings(false); };
         window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-      }, [showDiagram]);
+        window.addEventListener("mousedown", onDown);
+        return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mousedown", onDown); };
+      }, []);
 
       useEffect(() => {
         const check = () =>
@@ -196,12 +282,6 @@
         const id = setInterval(check, 15000);
         return () => clearInterval(id);
       }, []);
-
-      // Thinking effort and context window ("" = the model's / server's default), remembered in the browser
-      const saved = k => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
-      const [effort, setEffort] = useState(() => saved("effort"));
-      const [numCtx, setNumCtx] = useState(() => saved("num_ctx"));
-      const remember = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
       // What the selected model supports, as reported by Ollama through the MCP server
       const info = (models.details || {})[model || models.default] || {};
@@ -216,6 +296,7 @@
       // Drop a saved choice the selected model cannot honour
       const effortValue = effortOptions.some(([v]) => v === effort) ? effort : "";
       const ctxValue = ctxOptions.includes(Number(numCtx)) ? numCtx : "";
+      const modelList = [...new Set([models.default, ...models.models])].filter(Boolean);
 
       // Load the model list once the MCP server is reachable; forget a saved model that is gone
       useEffect(() => {
@@ -227,13 +308,21 @@
         }).catch(() => {});
       }, [mcp]);
 
-      function pickModel(m) {
-        setModel(m);
-        try { localStorage.setItem("model", m); } catch {}
-      }
+      const pickModel = m => { setModel(m); remember("model", m); };
+      const pickEffort = v => { setEffort(v); remember("effort", v); };
+      const pickCtx = v => { setNumCtx(v); remember("num_ctx", v); };
+      const resetSettings = () => { pickModel(""); pickEffort(""); pickCtx(""); setTopK(DEFAULT_TOP_K); };
 
       useEffect(() => { endRef.current && endRef.current.scrollIntoView({ behavior: "smooth" }); },
                 [messages, loading]);
+
+      // The text box grows with its content (up to a limit) and shrinks back after sending
+      useEffect(() => {
+        const ta = taRef.current;
+        if (!ta) return;
+        ta.style.height = "auto";
+        ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+      }, [question]);
 
       async function send(text) {
         const q = text.trim();
@@ -281,94 +370,141 @@
         }
       }
 
+      // Enter sends, Shift+Enter adds a new line
+      const onKeyDown = e => {
+        if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(question); }
+      };
+
       // The MCP Inspector runs next to this page, on port 6274 of the same host
       const inspectorUrl = `${window.location.protocol}//${window.location.hostname}:6274/`;
       const diagramUrl = "/docs/system_architecture_diagram.png"; // served by Flask from the docs/ folder
-      const badge = { ok: ["ok", "MCP connected"], down: ["bad", "MCP unreachable"], checking: ["", "Checking…"] }[mcp];
+      const badge = { ok: ["ok", "Connected"], down: ["bad", "Unreachable"], checking: ["", "Checking…"] }[mcp];
+      const effortLabel = (effortOptions.find(([v]) => v === effortValue) || [])[1];
+      const chips = [
+        { text: model || models.default || "default model", changed: !!model },
+        { text: `top ${topK}`, changed: topK !== DEFAULT_TOP_K },
+        ...(effortValue ? [{ text: `thinking ${effortLabel.toLowerCase()}`, changed: true }] : []),
+        ...(ctxValue ? [{ text: `context ${fmtCtx(Number(ctxValue))}`, changed: true }] : []),
+      ];
 
       return (
         <div className="app">
           <header>
-            <div className="logo">✦</div>
-            <div>
-              <h1>FAQ Assistant</h1>
-              <p>Answers grounded in our FAQ documents</p>
+            <div className="head col">
+              <div className="mark"><Spark /></div>
+              <div>
+                <h1>FAQ Assistant</h1>
+                <p>Answers grounded in our FAQ documents</p>
+              </div>
+              <div className="spacer" />
+              <div className="actions">
+                <span className="status" role="status"><span className={"dot " + badge[0]} />{badge[1]}</span>
+                <button className="btn" title="Show the system architecture diagram"
+                        onClick={() => { setDiagramFailed(false); setShowDiagram(true); }}>
+                  <IconDiagram /><span className="label">Diagram</span>
+                </button>
+                <a className="btn" href={inspectorUrl} target="_blank" rel="noopener noreferrer"
+                   aria-disabled={mcp !== "ok"} title="Open the MCP Inspector in a new tab">
+                  <IconExternal /><span className="label">Inspector</span>
+                </a>
+                {messages.length > 0 && (
+                  <button className="btn" title="Start a new chat"
+                          onClick={() => { setMessages([]); sessionId.current = newSessionId(); }}>
+                    <IconClear /><span className="label">Clear</span>
+                  </button>
+                )}
+                <div className="settings-wrap" ref={settingsRef}>
+                  <button className="btn" aria-expanded={showSettings} aria-haspopup="dialog" title="Settings"
+                          onClick={() => setShowSettings(s => !s)}>
+                    <IconGear /><span className="label">Settings</span>
+                  </button>
+                  {showSettings && (
+                    <div className="popover" role="dialog" aria-label="Settings">
+                      <h2>Settings</h2>
+                      <div className="field">
+                        <label htmlFor="s-model">Model</label>
+                        <select id="s-model" disabled={!modelList.length} value={model || models.default}
+                                onChange={e => pickModel(e.target.value === models.default ? "" : e.target.value)}>
+                          {!modelList.length && <option>Unavailable</option>}
+                          {modelList.map(n => <option key={n} value={n}>{n}{n === models.default ? " (default)" : ""}</option>)}
+                        </select>
+                        <p className="hint">Ollama model that answers. The default comes from OLLAMA_MODEL.</p>
+                      </div>
+                      <div className="field">
+                        <label htmlFor="s-effort">Thinking</label>
+                        <select id="s-effort" disabled={!effortOptions.length} value={effortValue} onChange={e => pickEffort(e.target.value)}>
+                          {effortOptions.length ? <option value="">Model default</option> : <option value="">Not supported by this model</option>}
+                          {effortOptions.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                        </select>
+                        <p className="hint">More thinking can improve answers but takes longer.</p>
+                      </div>
+                      <div className="field">
+                        <label htmlFor="s-ctx">Context window</label>
+                        <select id="s-ctx" disabled={!ctxOptions.length} value={ctxValue} onChange={e => pickCtx(e.target.value)}>
+                          {ctxOptions.length ? <option value="">Default</option> : <option value="">Not reported by Ollama</option>}
+                          {ctxOptions.map(n => <option key={n} value={n}>{fmtCtx(n)} tokens</option>)}
+                        </select>
+                        <p className="hint">Larger windows use more memory and are slower.</p>
+                      </div>
+                      <div className="field">
+                        <label htmlFor="s-topk">Chunks to retrieve (top k)</label>
+                        <select id="s-topk" value={topK} onChange={e => setTopK(Number(e.target.value))}>
+                          {[...Array(10)].map((_, i) => <option key={i + 1} value={i + 1}>{i + 1}{i + 1 === DEFAULT_TOP_K ? " (default)" : ""}</option>)}
+                        </select>
+                        <p className="hint">How many FAQ passages are used for each question.</p>
+                      </div>
+                      <div className="pop-foot">
+                        <button className="link" onClick={resetSettings}>Reset to defaults</button>
+                        <button className="link" onClick={() => setShowSettings(false)}>Done</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-            <div className="spacer" />
-            {messages.length > 0 && <button className="ghost" onClick={() => { setMessages([]); sessionId.current = newSessionId(); }}>Clear</button>}
-            {mcp === "ok" ? (
-              <a className="badge" href={inspectorUrl} target="_blank" rel="noopener noreferrer"
-                 title="Open the MCP Inspector in a new tab">
-                <span className="dot ok" />{badge[1]} ↗
-              </a>
-            ) : (
-              <span className="badge"><span className={"dot " + badge[0]} />{badge[1]}</span>
-            )}
-            <button className="badge" title="Show the system architecture diagram"
-                    onClick={() => { setDiagramFailed(false); setShowDiagram(true); }}>
-              Architecture diagram
-            </button>
           </header>
 
-          <div className="thread">
-            {messages.length === 0 && (
-              <div className="empty">
-                <div className="big">💬</div>
-                <h2>What would you like to know?</h2>
-                <p>Ask a question, or try one of these.</p>
-                <div className="suggestions">
-                  {SUGGESTIONS.map(s => (
-                    <button key={s} className="suggestion" onClick={() => send(s)}>{s}</button>
-                  ))}
+          <div className="thread-scroll">
+            <div className="thread col">
+              {messages.length === 0 && !loading && (
+                <div className="empty">
+                  <div className="mark"><Spark /></div>
+                  <h2>What would you like to know?</h2>
+                  <p>Ask a question, or start with one of these.</p>
+                  <div className="cards">
+                    {SUGGESTIONS.map(s => <button key={s} className="card" onClick={() => send(s)}>{s}</button>)}
+                  </div>
                 </div>
-              </div>
-            )}
-            {messages.map((m, i) => <Message key={i} m={m} />)}
-            {loading && (
-              <div className="row assistant">
-                <div className="avatar">✦</div>
-                <div className="bubble">
-                  <span className="typing"><i /><i /><i /></span>
-                  {steps.length > 0 && <span className="status">{steps[steps.length - 1]}…</span>}
+              )}
+              {messages.map((m, i) => <Message key={i} m={m} />)}
+              {loading && (
+                <div className="row assistant">
+                  <div className="avatar"><Spark /></div>
+                  <div className="thinking" role="status">
+                    <span className="typing"><i /><i /><i /></span>
+                    {steps.length > 0 && <span>{steps[steps.length - 1]}…</span>}
+                  </div>
                 </div>
-              </div>
-            )}
-            <div ref={endRef} />
+              )}
+              <div ref={endRef} />
+            </div>
           </div>
 
-          <div className="opts">
-            {models.models.length > 0 && (
-              <select value={model || models.default} onChange={e => pickModel(e.target.value === models.default ? "" : e.target.value)}
-                      title="Ollama model used to answer (the default comes from OLLAMA_MODEL)">
-                {[...new Set([models.default, ...models.models])].filter(Boolean).map(n => (
-                  <option key={n} value={n}>{n}{n === models.default ? " (default)" : ""}</option>
+          <div className="dock">
+            <div className="col">
+              <div className="summary">
+                {chips.map((c, i) => (
+                  <button key={i} className={"chip" + (c.changed ? " changed" : "")} onClick={() => setShowSettings(true)}
+                          title="Change settings">{c.text}</button>
                 ))}
-              </select>
-            )}
-            {effortOptions.length > 0 && (
-              <select value={effortValue} onChange={e => { setEffort(e.target.value); remember("effort", e.target.value); }}
-                      title="Thinking effort (only for models that can think)">
-                <option value="">Thinking: default</option>
-                {effortOptions.map(([v, l]) => <option key={v} value={v}>Thinking: {l}</option>)}
-              </select>
-            )}
-            {ctxOptions.length > 0 && (
-              <select value={ctxValue} onChange={e => { setNumCtx(e.target.value); remember("num_ctx", e.target.value); }}
-                      title="Context window in tokens (up to the model's maximum). Larger needs more memory and is slower.">
-                <option value="">Context: default</option>
-                {ctxOptions.map(n => <option key={n} value={n}>Context: {n.toLocaleString("en-US")}</option>)}
-              </select>
-            )}
+              </div>
+              <form className="composer" onSubmit={e => { e.preventDefault(); send(question); }}>
+                <textarea ref={taRef} rows={1} value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={onKeyDown}
+                          placeholder="Ask about authentication, SSO, HR policies…" aria-label="Your question" autoFocus />
+                <button className="send" disabled={loading || !question.trim()} aria-label="Send"><IconSend /></button>
+              </form>
+            </div>
           </div>
-
-          <form onSubmit={e => { e.preventDefault(); send(question); }}>
-            <input type="text" value={question} onChange={e => setQuestion(e.target.value)}
-                   placeholder="Ask about authentication, SSO, HR policies…" autoFocus />
-            <select value={topK} onChange={e => setTopK(Number(e.target.value))} title="Number of chunks to retrieve (top_k)">
-              {[...Array(10)].map((_, i) => <option key={i + 1} value={i + 1}>top {i + 1}</option>)}
-            </select>
-            <button className="send" disabled={loading || !question.trim()}>Ask</button>
-          </form>
 
           {showDiagram && (
             <div className="modal-backdrop" onClick={() => setShowDiagram(false)}>
@@ -377,8 +513,8 @@
                 <div className="modal-head">
                   <strong>System architecture</strong>
                   <div className="spacer" />
-                  <a className="ghost" href={diagramUrl} target="_blank" rel="noopener noreferrer">Open full size ↗</a>
-                  <button className="ghost" aria-label="Close" onClick={() => setShowDiagram(false)}>✕</button>
+                  <a className="btn" href={diagramUrl} target="_blank" rel="noopener noreferrer">Open full size <IconExternal /></a>
+                  <button className="btn" aria-label="Close" onClick={() => setShowDiagram(false)}>✕</button>
                 </div>
                 <div className="modal-body">
                   {diagramFailed
