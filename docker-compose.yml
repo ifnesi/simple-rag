@@ -1,0 +1,41 @@
+services:
+  # The ONLY owner of the vector DB: in-memory Qdrant + local embeddings, loaded once at startup.
+  # Reachable by the web backend (http://mcp:8000/mcp) and by Claude (http://localhost:8000/mcp).
+  mcp:
+    build: .
+    image: simple-rag
+    container_name: faq-mcp
+    command: ["python", "mcp_server.py"]
+    ports:
+      - "127.0.0.1:8000:8000"   # localhost only: the MCP endpoint has no auth
+    env_file:
+      - src/.env   # Ollama endpoint and model, chunking. No secrets.
+    environment:
+      FAQ_DIR: /app/faqs
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+    volumes:
+      - ./src/faqs:/app/faqs:ro
+
+  # Flask + static React. Talks to the MCP server only; no faqs, no DB access.
+  web:
+    image: simple-rag
+    container_name: faq-web
+    depends_on:
+      - mcp
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      MCP_URL: http://mcp:8000/mcp
+
+  # MCP Inspector: a UI to list and call the ask_faq tool directly, without the web page or Claude.
+  # Open http://localhost:6274 (the page carries its own token). Pinned to a tested version.
+  inspector:
+    image: ghcr.io/modelcontextprotocol/inspector:2.14.0
+    container_name: faq-inspector
+    depends_on:
+      - mcp
+    command: ["--web", "--transport", "http", "--server-url", "http://mcp:8000/mcp"]
+    ports:
+      - "127.0.0.1:6274:6274"   # localhost only
