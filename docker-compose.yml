@@ -26,6 +26,8 @@ services:
       - mcp
     ports:
       - "127.0.0.1:5050:5050"
+    env_file:
+      - src/.env   # the web backend keeps the chat memory, so it reads CHAT_HISTORY_TURNS too
     environment:
       MCP_URL: http://mcp:8000/mcp
 

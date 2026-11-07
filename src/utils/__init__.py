@@ -33,6 +33,10 @@ TOP_K_DEFAULT: int = int(os.getenv("TOP_K_DEFAULT", "4"))
 # questions scored 0.68-0.86 and unrelated ones 0.48-0.58: re-measure it if you change EMBED_MODEL.
 MIN_SCORE = float(os.getenv("MIN_SCORE", "0.60"))
 
+# ---- Chat memory (kept by the web backend, per browser session) ----
+# Question/answer pairs remembered to resolve follow-ups such as "and for contractors?". 0 turns off memory.
+CHAT_HISTORY_TURNS: int = int(os.getenv("CHAT_HISTORY_TURNS", "3"))
+
 # ---- MCP server and client ----
 MCP_TRANSPORT: str = os.getenv("MCP_TRANSPORT", "stdio")  # "stdio" or "streamable-http"
 MCP_HOST: str = os.getenv("MCP_HOST", "127.0.0.1")
@@ -64,6 +68,8 @@ if not 1 <= TOP_K_DEFAULT <= 10:
     raise ValueError(f"TOP_K_DEFAULT must be from 1 to 10, got {TOP_K_DEFAULT}")
 if not 0 <= MIN_SCORE <= 1:
     raise ValueError(f"MIN_SCORE must be from 0 to 1, got {MIN_SCORE}")
+if not 0 <= CHAT_HISTORY_TURNS <= 10:
+    raise ValueError(f"CHAT_HISTORY_TURNS must be from 0 to 10, got {CHAT_HISTORY_TURNS}")
 if MCP_TRANSPORT not in ("stdio", "streamable-http"):
     raise ValueError(
         f'MCP_TRANSPORT must be "stdio" or "streamable-http", got {MCP_TRANSPORT!r}'

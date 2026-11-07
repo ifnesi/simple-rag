@@ -3,6 +3,10 @@
 import asyncio
 import json
 import logging
+import re
+import threading
+import time
+from collections import OrderedDict, deque
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -12,7 +16,7 @@ from mcp.client.streamable_http import streamable_http_client
 from typing import Any, Literal, LiteralString
 
 # Settings come from utils/__init__.py (read from the environment and validated there)
-from utils import MCP_URL, TOP_K_DEFAULT
+from utils import CHAT_HISTORY_TURNS, MCP_URL, TOP_K_DEFAULT
 
 app: Any = Flask(
     __name__,
@@ -21,6 +25,47 @@ app: Any = Flask(
 )
 log: Logger = logging.getLogger(name="web")
 DOCS_DIR: Path = Path(__file__).parent / "docs"  # copied into the image by the Dockerfile
+
+
+# ---------------- Chat memory ----------------
+# The browser sends a session_id; the last CHAT_HISTORY_TURNS question/answer pairs of each session are
+# kept in this process (lost on restart, not shared between workers) and sent to the MCP tool.
+SESSION_TTL_SECONDS = 3600
+MAX_SESSIONS = 500
+_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+_sessions: "OrderedDict[str, tuple[float, deque]]" = OrderedDict()
+_sessions_lock = threading.Lock()
+
+
+def _valid_session(session_id: Any) -> str | None:
+    return session_id if isinstance(session_id, str) and _SESSION_ID.match(session_id) else None
+
+
+def _get_history(session_id: str | None) -> list[dict]:
+    if not session_id or CHAT_HISTORY_TURNS == 0:
+        return []
+    with _sessions_lock:
+        entry = _sessions.get(session_id)
+        if not entry or time.time() - entry[0] > SESSION_TTL_SECONDS:
+            _sessions.pop(session_id, None)
+            return []
+        return list(entry[1])
+
+
+def _remember(session_id: str | None, question: str, result: dict) -> None:
+    # An answer without sources is the "couldn't find" message: it would only pollute the history
+    if not session_id or CHAT_HISTORY_TURNS == 0 or not result.get("sources"):
+        return
+    with _sessions_lock:
+        now = time.time()
+        for sid in [k for k, (t, _) in _sessions.items() if now - t > SESSION_TTL_SECONDS]:
+            del _sessions[sid]
+        entry = _sessions.pop(session_id, None)
+        turns = entry[1] if entry else deque(maxlen=CHAT_HISTORY_TURNS)
+        turns.append({"question": question, "answer": str(result.get("answer", ""))})
+        _sessions[session_id] = (now, turns)  # most recently used goes last
+        while len(_sessions) > MAX_SESSIONS:
+            _sessions.popitem(last=False)
 
 
 # ---------------- MCP client ----------------
@@ -57,6 +102,7 @@ def _friendly(tool_error: str) -> str:
 def ask_via_mcp(
     question: str,
     top_k: int,
+    history: list[dict] | None = None,
 ) -> dict:
     result: Any = asyncio.run(
         main=_call_tool(
@@ -64,6 +110,7 @@ def ask_via_mcp(
             args={
                 "question": question,
                 "top_k": top_k,
+                **({"history": history} if history else {}),
             },
         )
     )
@@ -109,13 +156,15 @@ def ask() -> tuple[Any, Literal[400]] | Any | tuple[Any, Literal[502]]:
         top_k: int = int(data.get("top_k", TOP_K_DEFAULT))
     except (TypeError, ValueError):
         top_k = TOP_K_DEFAULT
+    session_id: str | None = _valid_session(data.get("session_id"))
     try:
-        return jsonify(
-            ask_via_mcp(
-                question,
-                top_k=top_k,
-            )
+        result: dict = ask_via_mcp(
+            question,
+            top_k=top_k,
+            history=_get_history(session_id),
         )
+        _remember(session_id, question, result)
+        return jsonify(result)
     except ToolError as e:
         log.error(msg=f"ask_faq tool failed: {e}")
         return (

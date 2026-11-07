@@ -1,6 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 # Settings come from utils/__init__.py (read from the environment and validated there)
 from utils import MCP_HOST, MCP_PORT, MCP_TRANSPORT, TOP_K_DEFAULT
@@ -36,14 +36,18 @@ mcp: Any = FastMCP(
 def ask_faq(
     question: str,
     top_k: int = TOP_K_DEFAULT,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, object]:
-    """Answer a question from the FAQ corpus. Returns the answer and the source files it came from."""
+    """Answer a question from the FAQ corpus. Returns the answer and the source files it came from.
+    `history` is optional: earlier {"question", "answer"} pairs of the conversation, oldest first, used
+    only to understand follow-up questions."""
     q: str = (question or "").strip()
     if not q:
         raise ValueError("`question` is required")
     return ask_faq_core(
         question=q,
         top_k=top_k if top_k > 0 and top_k <= 10 else TOP_K_DEFAULT,
+        history=history,
     )
 
 

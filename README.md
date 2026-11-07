@@ -43,9 +43,9 @@ There are no secrets, so `src/.env` is a normal committed file that docker-compo
 | `OLLAMA_URL` | Where the container reaches Ollama. Default `http://host.docker.internal:11434` (the machine running Docker/Colima) |
 | `OLLAMA_MODEL` | The model used for answers. Any model from `ollama list` |
 
-Other optional variables, all with defaults in the code: `OLLAMA_TIMEOUT` (seconds, default 240), `EMBED_MODEL`, `CHUNK_SIZE` (max characters per chunk, default 1000), `CHUNK_OVERLAP` (only used when a long entry is split, default 100), `TOP_K_DEFAULT` (4), `MIN_SCORE` (minimum cosine similarity for a chunk to be used, default 0.60; see below) and `TEMPERATURE` (default 0). Compose itself sets `FAQ_DIR`, `MCP_TRANSPORT`, `MCP_HOST`, `MCP_PORT` and, for the web container, `MCP_URL`.
+Other optional variables, all with defaults in the code: `OLLAMA_TIMEOUT` (seconds, default 240), `EMBED_MODEL`, `CHUNK_SIZE` (max characters per chunk, default 1000), `CHUNK_OVERLAP` (only used when a long entry is split, default 100), `TOP_K_DEFAULT` (4), `CHAT_HISTORY_TURNS` (question/answer pairs remembered per chat to understand follow-ups, default 3, `0` turns memory off; see below), `MIN_SCORE` (minimum cosine similarity for a chunk to be used, default 0.60; see below) and `TEMPERATURE` (default 0). Compose itself sets `FAQ_DIR`, `MCP_TRANSPORT`, `MCP_HOST`, `MCP_PORT` and, for the web container, `MCP_URL`.
 
-All variables are read in one place, `src/utils/__init__.py`, and the other modules import them from there (`from utils import OLLAMA_URL`). The same file validates them, so a bad value stops the container at startup with a clear message (visible in `docker-compose logs mcp`) instead of failing later. The rules: `OLLAMA_URL` and `MCP_URL` must start with `http://` or `https://`; `OLLAMA_MODEL` and `EMBED_MODEL` must not be empty; `OLLAMA_TIMEOUT` above 0; `TEMPERATURE` 0 to 2; `CHUNK_SIZE` at least 50; `CHUNK_OVERLAP` 0 up to below `CHUNK_SIZE`; `TOP_K_DEFAULT` 1 to 10; `MIN_SCORE` 0 to 1; `MCP_TRANSPORT` `stdio` or `streamable-http`; `MCP_PORT` 1 to 65535. A number that is not a number fails with Python's own error, such as `invalid literal for int()`. The FAQ directory is checked when the files are loaded (not at import, because the web container has no FAQ files).
+All variables are read in one place, `src/utils/__init__.py`, and the other modules import them from there (`from utils import OLLAMA_URL`). The same file validates them, so a bad value stops the container at startup with a clear message (visible in `docker-compose logs mcp`) instead of failing later. The rules: `OLLAMA_URL` and `MCP_URL` must start with `http://` or `https://`; `OLLAMA_MODEL` and `EMBED_MODEL` must not be empty; `OLLAMA_TIMEOUT` above 0; `TEMPERATURE` 0 to 2; `CHUNK_SIZE` at least 50; `CHUNK_OVERLAP` 0 up to below `CHUNK_SIZE`; `TOP_K_DEFAULT` 1 to 10; `CHAT_HISTORY_TURNS` 0 to 10; `MIN_SCORE` 0 to 1; `MCP_TRANSPORT` `stdio` or `streamable-http`; `MCP_PORT` 1 to 65535. A number that is not a number fails with Python's own error, such as `invalid literal for int()`. The FAQ directory is checked when the files are loaded (not at import, because the web container has no FAQ files).
 
 After changing `src/.env`, recreate the container so it is re-read: `docker-compose up -d --force-recreate mcp` (a plain `restart` does not reload it). Changing `EMBED_MODEL` also needs a rebuild, because the model is baked into the image: `docker-compose build --build-arg EMBED_MODEL=<name>`.
 
@@ -87,7 +87,7 @@ Then ask Claude something about the FAQs; it will call the `ask_faq` tool.
 ```
 The `-e MCP_TRANSPORT=stdio` matters: the container is configured for HTTP, and this overrides it for this one process. The stack must already be running. Each stdio connection starts its own copy of the index, so allow a couple of seconds on first use.
 
-**Tool contract:** `ask_faq(question: str, top_k: int = 4)` (`top_k` 1–10) returns exactly `{"answer": "...", "sources": ["file.md", ...]}`.
+**Tool contract:** `ask_faq(question: str, top_k: int = 4)` (`top_k` 1–10) also takes an optional `history` (earlier `{"question", "answer"}` pairs, oldest first) and returns exactly `{"answer": "...", "sources": ["file.md", ...]}`.
 
 ## Project layout
 ```
@@ -146,7 +146,7 @@ At startup the server checks that Ollama is reachable and the model is pulled, a
 | Route | Behavior |
 |---|---|
 | `GET /` | the React page |
-| `POST /api/ask` | `{"question", "top_k"?}` → calls `ask_faq` through MCP → `{"answer", "sources"}`. The `top_k` sent by the UI's selector overrides `TOP_K_DEFAULT`; if it is missing or not a number the default is used, and a number outside 1–10 falls back to the default in the MCP tool. `400` for an empty question, `502` if the MCP call fails (with a readable message for "cannot reach Ollama" and "model not found") |
+| `POST /api/ask` | `{"question", "top_k"?, "session_id"?}` → calls `ask_faq` through MCP → `{"answer", "sources"}`. The `top_k` sent by the UI's selector overrides `TOP_K_DEFAULT`; if it is missing or not a number the default is used, and a number outside 1–10 falls back to the default in the MCP tool. `400` for an empty question, `502` if the MCP call fails (with a readable message for "cannot reach Ollama" and "model not found") |
 | `GET /api/health` | lists the MCP server's tools, `503` if unreachable |
 | `GET /docs/<file>` | files from `docs/`, which the Dockerfile copies into the web image; the UI uses it for the architecture diagram. Paths that try to leave the folder return `404` |
 
@@ -178,3 +178,9 @@ Checked on Colima (aarch64) with Ollama running on the host:
 - **FAQ changes are not showing up**: the files are loaded only at startup. Run `docker-compose restart mcp`.
 - **Port already in use**: change the left-hand side of `127.0.0.1:5050:5050` or `127.0.0.1:8000:8000` in `docker-compose.yml`.
 - **After changing `src/**/*.py`, `src/frontend` or `docs/`** (for example a new architecture diagram): rebuild with `docker-compose up --build`. The code and `docs/` are copied into the image, and only `src/faqs/` is mounted.
+
+## Chat memory (follow-up questions)
+
+The web UI generates a random `session_id` when the page loads (and a new one when you click **Clear**) and sends it with every `/api/ask` request. The Flask backend keeps the last `CHAT_HISTORY_TURNS` question/answer pairs of each session in memory (sessions expire after 1 hour, at most 500 are kept; everything is lost on restart and not shared between workers) and passes them to the `ask_faq` tool as the optional `history` argument.
+
+The history is used only to rewrite the question, not to answer it: when history exists, the model turns the latest message into standalone questions ("and for contractors?" becomes "How do I request PTO as a contractor?"), retrieval runs on those, and the answer is generated from the retrieved FAQ text only. Answers without sources (the "couldn't find" message) are not remembered. With history, every request makes the extra rewrite call to the model. Without a `session_id`, or with `CHAT_HISTORY_TURNS=0`, each question is independent, as before. The web container reads `src/.env` as well, because it owns the memory.

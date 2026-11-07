@@ -197,7 +197,7 @@ def load_faqs() -> None:
 NOT_FOUND = "I couldn't find any information about that in the FAQs. Please try rephrasing your question."
 
 # Only questions that look compound pay for the extra model call below.
-_COMPOUND: Pattern[str] = re.compile(
+_COMPOUND_REGEX: Pattern[str] = re.compile(
     r"\b(and|also|plus|then|as well as|along with)\b|[,;&]|\?\s*\S", re.I
 )
 _SPLIT_SCHEMA: dict[str, Any] = {
@@ -214,15 +214,48 @@ _SPLIT_SCHEMA: dict[str, Any] = {
 }
 
 
-def _split_question(q: str) -> List[str]:
-    """Split a compound question into separate questions, one per topic.
+# Stored answers are cut to this many characters in the rewrite prompt (enough to resolve "it"/"that")
+_HISTORY_ANSWER_CHARS = 500
+
+
+def _format_history(history: List[Dict[str, str]]) -> str:
+    lines: list[str] = []
+    for turn in history:
+        lines.append(f"User: {str(turn.get('question', '')).strip()}")
+        lines.append(f"Assistant: {str(turn.get('answer', '')).strip()[:_HISTORY_ANSWER_CHARS]}")
+    return "\n".join(lines)
+
+
+def _split_question(
+    q: str,
+    history: List[Dict[str, str]] | None = None,
+) -> List[str]:
+    """Turn the user's message into standalone questions, one per topic.
 
     One embedding of "how to request PTO and reset my password" lands between the two topics and
-    retrieves neither well, so each part is searched on its own. Returns [q] for a simple question,
-    or if the model call fails."""
-    if not _COMPOUND.search(q):
+    retrieves neither well, so each part is searched on its own. With a conversation history, a follow-up
+    such as "and for contractors?" is also rewritten so it makes sense without the earlier turns.
+    Returns [q] for a simple question without history, or if the model call fails."""
+    if not history and not _COMPOUND_REGEX.search(q):
         return [q]
     try:
+        if history:
+            system: str = (
+                "Rewrite the user's latest message into the separate, self-contained questions it contains. "
+                "Use the earlier conversation only to resolve references such as 'it', 'that' or 'what about X?', "
+                "so each question can be understood on its own. "
+                "If the latest message is already self-contained or about a new topic, keep it unchanged and do not add "
+                "anything from the conversation. If it contains several topics, return one question per topic. "
+                "Never answer the questions. Return at most 4."
+            )
+            content: str = f"Conversation so far:\n{_format_history(history)}\n\nLatest message: {q}"
+        else:
+            system = (
+                "Split the user's message into the separate, self-contained questions it contains, "
+                "keeping the user's wording. If it contains only one question, return it unchanged. "
+                "Never answer the questions. Return at most 4."
+            )
+            content = q
         resp = client.chat(
             model=OLLAMA_MODEL,
             options={
@@ -232,15 +265,11 @@ def _split_question(q: str) -> List[str]:
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "Split the user's message into the separate, self-contained questions it contains, "
-                        "keeping the user's wording. If it contains only one question, return it unchanged. "
-                        "Never answer the questions. Return at most 4."
-                    ),
+                    "content": system,
                 },
                 {
                     "role": "user",
-                    "content": q,
+                    "content": content,
                 },
             ],
         )
@@ -293,15 +322,18 @@ def _generate_answer(
 def ask_faq_core(
     question: str,
     top_k: int = TOP_K_DEFAULT,
+    history: List[Dict[str, str]] | None = None,
 ) -> Dict[str, object]:
     q: str = (question or "").strip()
     if not q:
         raise ValueError("question is required")
 
     # top_k chunks for each sub-question; a chunk found by several of them is kept once
-    questions: List[str] = _split_question(q)
-    if len(questions) > 1:
+    questions: List[str] = _split_question(q, history=history)
+    if len(questions) > 1 or questions != [q]:
         log.info(msg=f"[split] {questions}")
+    # With history, the user's message may be a follow-up that means nothing alone: answer the rewrite
+    standalone: str = " ".join(questions) if history else q
     hits, seen = [], set()
     for sub in questions:
         for h in _qdrant.query_points(
@@ -330,7 +362,7 @@ def ask_faq_core(
     context: LiteralString = "\n\n---\n\n".join(h.payload["text"] for h in hits)
     answer: str = _generate_answer(
         context,
-        question=q,
+        question=standalone,
     )
     if answer.strip() == NOT_FOUND:
         sources: List[str] = []  # nothing relevant was found, so do not cite files
