@@ -106,6 +106,8 @@ def _friendly(tool_error: str) -> str:
         return "Could not reach Ollama. Check that it is running and that OLLAMA_URL in src/.env is reachable from the container."
     if "is not installed in ollama" in t:  # the user picked a model Ollama does not have
         return tool_error.split("ask_faq: ", 1)[-1]
+    if "context window must be" in t or "effort must be" in t:
+        return tool_error.split("ask_faq: ", 1)[-1]
     if "not found" in t and "model" in t:
         return "Ollama does not have the configured model. Run `ollama pull <model>` for OLLAMA_MODEL in src/.env."
     return "The MCP server could not generate an answer. See `docker-compose logs mcp` for details."
@@ -116,7 +118,7 @@ def ask_via_mcp(
     top_k: int,
     history: list[dict] | None = None,
     on_progress: Any = None,
-    model: str | None = None,
+    llm: dict | None = None,
 ) -> dict:
     result: Any = asyncio.run(
         main=_call_tool(
@@ -125,7 +127,7 @@ def ask_via_mcp(
                 "question": question,
                 "top_k": top_k,
                 **({"history": history} if history else {}),
-                **({"model": model} if model else {}),
+                **(llm or {}),  # model, effort, num_ctx: only the ones the user set
             },
             on_progress=on_progress,
         )
@@ -176,18 +178,27 @@ def ask() -> tuple[Any, Literal[400]] | Any | tuple[Any, Literal[502]]:
         top_k: int = int(data.get("top_k", TOP_K_DEFAULT))
     except (TypeError, ValueError):
         top_k = TOP_K_DEFAULT
-    model: str | None = str(data.get("model") or "").strip()[:200] or None
+    llm: dict = {}
+    if str(data.get("model") or "").strip():
+        llm["model"] = str(data["model"]).strip()[:200]
+    if str(data.get("effort") or "").strip():
+        llm["effort"] = str(data["effort"]).strip()[:20]
+    try:
+        if int(data.get("num_ctx") or 0) > 0:
+            llm["num_ctx"] = int(data["num_ctx"])
+    except (TypeError, ValueError):
+        pass
     session_id: str | None = _valid_session(data.get("session_id"))
     history: list[dict] = _get_history(session_id)
 
     if data.get("stream"):
         return Response(
-            stream_with_context(_stream_answer(question, top_k, history, session_id, model)),
+            stream_with_context(_stream_answer(question, top_k, history, session_id, llm)),
             mimetype="application/x-ndjson",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     try:
-        result: dict = ask_via_mcp(question, top_k=top_k, history=history, model=model)
+        result: dict = ask_via_mcp(question, top_k=top_k, history=history, llm=llm)
         _remember(session_id, question, result)
         return jsonify(result)
     except ToolError as e:
@@ -199,7 +210,7 @@ def ask() -> tuple[Any, Literal[400]] | Any | tuple[Any, Literal[502]]:
 
 
 def _stream_answer(
-    question: str, top_k: int, history: list[dict], session_id: str | None, model: str | None
+    question: str, top_k: int, history: list[dict], session_id: str | None, llm: dict
 ) -> Any:
     """Yield one JSON object per line: {"type":"status","text"} for each step the MCP server reports,
     then {"type":"result",...} or {"type":"error","error"}. The MCP call runs in a thread and hands its
@@ -212,7 +223,7 @@ def _stream_answer(
                 question,
                 top_k=top_k,
                 history=history,
-                model=model,
+                llm=llm,
                 on_progress=lambda m: events.put({"type": "status", "text": m}),
             )
             _remember(session_id, question, result)

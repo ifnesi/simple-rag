@@ -87,7 +87,7 @@ Then ask Claude something about the FAQs; it will call the `ask_faq` tool.
 ```
 The `-e MCP_TRANSPORT=stdio` matters: the container is configured for HTTP, and this overrides it for this one process. The stack must already be running. Each stdio connection starts its own copy of the index, so allow a couple of seconds on first use.
 
-**Tool contract:** `ask_faq(question: str, top_k: int = 4)` (`top_k` 1–10) also takes an optional `model` (an installed Ollama model; default `OLLAMA_MODEL`, an unknown one is an error) and an optional `history` (earlier `{"question", "answer"}` pairs, oldest first) and returns exactly `{"answer": "...", "sources": ["file.md", ...]}`.
+**Tool contract:** `ask_faq(question: str, top_k: int = 4)` (`top_k` 1–10) also takes an optional `model` (an installed Ollama model; default `OLLAMA_MODEL`, an unknown one is an error), `effort` and `num_ctx` (see [Choosing the Ollama model](#choosing-the-ollama-model)) and an optional `history` (earlier `{"question", "answer"}` pairs, oldest first) and returns exactly `{"answer": "...", "sources": ["file.md", ...]}`.
 
 ## Project layout
 ```
@@ -155,6 +155,12 @@ The UI is a single `index.html` with React, `marked` and `DOMPurify` from a CDN 
 
 ### Choosing the Ollama model
 `OLLAMA_MODEL` in `src/.env` stays the default. The page shows a model dropdown (next to `top k`) filled from `GET /api/models`, which calls the MCP tool `list_models` (returns `{"default": "...", "models": [...]}`: the models Ollama has pulled, minus names that look like embedding-only models). The choice is saved in the browser and sent as `model` with each question; picking the default sends nothing. `ask_faq` accepts only an installed model and returns a clear error for any other, rather than silently using the default. The same model is used for both model calls (the question rewrite and the answer); retrieval always uses the local embedding model, so it does not change. The first request with a model Ollama has not loaded yet is slower (`OLLAMA_TIMEOUT` applies). There is no authentication, so anyone who can open the page can run any installed model: fine on localhost, think twice before exposing it. The "Generating the answer with …" progress step shows which model is used.
+
+Two more dropdowns appear when the selected model supports them, both from what Ollama reports (`ollama show`) through `list_models` (`details`):
+- **Thinking** (effort): for models with the `thinking` capability. `gpt-oss` takes **Low / Medium / High** (sent as Ollama's `think` parameter); other thinking models only take **On / Off** (`think` true or false). "Default" sends nothing, so the model behaves as it does without the setting. A model that cannot think never receives `think`. Effort applies to the answer call only: the question rewrite is a short structured-output call where reasoning would only add delay. Higher effort adds time (raise `OLLAMA_TIMEOUT` if needed). Needs `ollama>=0.5.3`.
+- **Context**: the context window in tokens (`num_ctx`), from 2,048 up to the model's own maximum (`<arch>.context_length`). It applies to both model calls, because Ollama reloads a model when `num_ctx` changes. A larger window uses more memory and is slower; the default is whatever Ollama uses for that model. Values below 512 or above the model's maximum are rejected with a clear message.
+
+A model whose details Ollama does not report simply gets no extra dropdowns.
 
 ### Chat memory (follow-up questions)
 

@@ -41,11 +41,15 @@ async def ask_faq(
     top_k: int = TOP_K_DEFAULT,
     history: Optional[List[Dict[str, str]]] = None,
     model: Optional[str] = None,
+    effort: Optional[str] = None,
+    num_ctx: Optional[int] = None,
 ) -> Dict[str, object]:
     """Answer a question from the FAQ corpus. Returns the answer and the source files it came from.
     `history` is optional: earlier {"question", "answer"} pairs of the conversation, oldest first, used
     only to understand follow-up questions. `model` is optional: an Ollama model from `list_models`
-    (default: the server's OLLAMA_MODEL); an unknown model is an error. While it works, the tool sends standard MCP progress
+    (default: the server's OLLAMA_MODEL); an unknown model is an error.
+    `effort` (low, medium, high, on or off) sets the thinking of models that can think (see `list_models`),
+    and `num_ctx` is the context window in tokens, up to the model's `max_context`. While it works, the tool sends standard MCP progress
     notifications (and log messages) describing each step, for clients that ask for them."""
     q: str = (question or "").strip()
     if not q:
@@ -74,13 +78,16 @@ async def ask_faq(
             history=history,
             on_step=on_step,
             model=model,
+            effort=effort,
+            num_ctx=num_ctx,
         )
     )
 
 
 @mcp.tool()
 def list_models() -> Dict[str, object]:
-    """List the Ollama models `ask_faq` can use. Returns {"default": "<model>", "models": ["<model>", ...]}."""
+    """List the Ollama models `ask_faq` can use: {"default": "<model>", "models": [...], "details": {model:
+    {"thinking": "levels" | "toggle" | null, "max_context": tokens | null}}}."""
     return list_models_core()
 
 

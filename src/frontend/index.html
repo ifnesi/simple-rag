@@ -88,6 +88,7 @@
     .src { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px;
            font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); }
 
+    .opts { display: flex; gap: 8px; flex-wrap: wrap; }
     .steps { margin-top: 10px; font-size: .8rem; color: var(--muted); }
     .steps summary { cursor: pointer; user-select: none; }
     .steps ol { margin: 6px 0 0; padding-left: 20px; }
@@ -171,7 +172,7 @@
       const [question, setQuestion] = useState("");
       const [topK, setTopK] = useState(4);
       // Ollama models the user can pick. "" means the server default (OLLAMA_MODEL in .env).
-      const [models, setModels] = useState({ default: "", models: [] });
+      const [models, setModels] = useState({ default: "", models: [], details: {} });
       const [model, setModel] = useState(() => { try { return localStorage.getItem("model") || ""; } catch { return ""; } });
       const [loading, setLoading] = useState(false);
       const [steps, setSteps] = useState([]);  // what the backend reports while a question is running
@@ -195,6 +196,26 @@
         const id = setInterval(check, 15000);
         return () => clearInterval(id);
       }, []);
+
+      // Thinking effort and context window ("" = the model's / server's default), remembered in the browser
+      const saved = k => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
+      const [effort, setEffort] = useState(() => saved("effort"));
+      const [numCtx, setNumCtx] = useState(() => saved("num_ctx"));
+      const remember = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+
+      // What the selected model supports, as reported by Ollama through the MCP server
+      const info = (models.details || {})[model || models.default] || {};
+      const effortOptions = info.thinking === "levels" ? [["low", "Low"], ["medium", "Medium"], ["high", "High"]]
+                          : info.thinking === "toggle" ? [["on", "On"], ["off", "Off"]] : [];
+      const ctxOptions = (() => {
+        const max = info.max_context;
+        if (!max) return [];
+        const sizes = [2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144].filter(n => n < max);
+        return [...sizes, max];
+      })();
+      // Drop a saved choice the selected model cannot honour
+      const effortValue = effortOptions.some(([v]) => v === effort) ? effort : "";
+      const ctxValue = ctxOptions.includes(Number(numCtx)) ? numCtx : "";
 
       // Load the model list once the MCP server is reachable; forget a saved model that is gone
       useEffect(() => {
@@ -224,7 +245,8 @@
           const r = await fetch("/api/ask", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: q, top_k: topK, session_id: sessionId.current, stream: true, ...(model ? { model } : {}) }),
+            body: JSON.stringify({ question: q, top_k: topK, session_id: sessionId.current, stream: true, ...(model ? { model } : {}),
+              ...(effortValue ? { effort: effortValue } : {}), ...(ctxValue ? { num_ctx: Number(ctxValue) } : {}) }),
           });
           if (!r.ok) {
             const data = await r.json().catch(() => ({}));
@@ -314,9 +336,7 @@
             <div ref={endRef} />
           </div>
 
-          <form onSubmit={e => { e.preventDefault(); send(question); }}>
-            <input type="text" value={question} onChange={e => setQuestion(e.target.value)}
-                   placeholder="Ask about authentication, SSO, HR policies…" autoFocus />
+          <div className="opts">
             {models.models.length > 0 && (
               <select value={model || models.default} onChange={e => pickModel(e.target.value === models.default ? "" : e.target.value)}
                       title="Ollama model used to answer (the default comes from OLLAMA_MODEL)">
@@ -325,12 +345,30 @@
                 ))}
               </select>
             )}
+            {effortOptions.length > 0 && (
+              <select value={effortValue} onChange={e => { setEffort(e.target.value); remember("effort", e.target.value); }}
+                      title="Thinking effort (only for models that can think)">
+                <option value="">Thinking: default</option>
+                {effortOptions.map(([v, l]) => <option key={v} value={v}>Thinking: {l}</option>)}
+              </select>
+            )}
+            {ctxOptions.length > 0 && (
+              <select value={ctxValue} onChange={e => { setNumCtx(e.target.value); remember("num_ctx", e.target.value); }}
+                      title="Context window in tokens (up to the model's maximum). Larger needs more memory and is slower.">
+                <option value="">Context: default</option>
+                {ctxOptions.map(n => <option key={n} value={n}>Context: {n.toLocaleString("en-US")}</option>)}
+              </select>
+            )}
+          </div>
+
+          <form onSubmit={e => { e.preventDefault(); send(question); }}>
+            <input type="text" value={question} onChange={e => setQuestion(e.target.value)}
+                   placeholder="Ask about authentication, SSO, HR policies…" autoFocus />
             <select value={topK} onChange={e => setTopK(Number(e.target.value))} title="Number of chunks to retrieve (top_k)">
               {[...Array(10)].map((_, i) => <option key={i + 1} value={i + 1}>top {i + 1}</option>)}
             </select>
             <button className="send" disabled={loading || !question.trim()}>Ask</button>
           </form>
-          <footer>Powered by the FAQ MCP server · tool: ask_faq</footer>
 
           {showDiagram && (
             <div className="modal-backdrop" onClick={() => setShowDiagram(false)}>

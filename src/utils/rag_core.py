@@ -91,7 +91,67 @@ def _installed_models() -> list[str]:
 def list_models() -> Dict[str, object]:
     """The models Ollama has pulled (chat-capable ones) and the default from OLLAMA_MODEL."""
     names: list[str] = [n for n in _installed_models() if not _NOT_CHAT_MODEL.search(n)]
-    return {"default": OLLAMA_MODEL, "models": names}
+    return {
+        "default": OLLAMA_MODEL,
+        "models": names,
+        # per model: "thinking" is "levels" (low/medium/high), "toggle" (on/off) or null;
+        # "max_context" is the largest context window in tokens, or null if Ollama does not say
+        "details": {n: _details(n) for n in dict.fromkeys([OLLAMA_MODEL, *names])},
+    }
+
+
+_LEVEL_MODELS: Pattern[str] = re.compile(r"gpt-oss", re.I)  # the family that takes low/medium/high
+_model_details: dict[str, dict[str, Any]] = {}
+
+
+def _details(model: str) -> dict[str, Any]:
+    """What Ollama reports about a model: whether it can think (and if it takes levels) and its maximum
+    context window in tokens. Cached per name; empty fields when Ollama does not say."""
+    if model in _model_details:
+        return _model_details[model]
+    info: dict[str, Any] = {"thinking": None, "max_context": None}
+    try:
+        resp = client.show(model)
+        caps = list(getattr(resp, "capabilities", None) or [])
+        if "thinking" in caps:
+            info["thinking"] = "levels" if _LEVEL_MODELS.search(model) else "toggle"
+        mi = getattr(resp, "modelinfo", None) or {}
+        arch = mi.get("general.architecture")
+        ctx = mi.get(f"{arch}.context_length") if arch else None
+        if isinstance(ctx, int) and ctx > 0:
+            info["max_context"] = ctx
+    except Exception as e:
+        log.warning(msg=f"[warn] could not read details of model {model} ({e})")
+        return info  # not cached: try again next time
+    _model_details[model] = info
+    return info
+
+
+def _think_param(model: str, effort: str | None) -> bool | str | None:
+    """The `think` value to send, or None to send nothing. Levels (low/medium/high) only for models that
+    take them, on/off for other thinking models; a model that cannot think never gets the parameter."""
+    effort = (effort or "").strip().lower()
+    if not effort:
+        return None
+    if effort not in ("low", "medium", "high", "on", "off"):
+        raise ValueError(f"Effort must be low, medium, high, on or off, got '{effort}'")
+    kind = _details(model)["thinking"]
+    if kind == "levels":
+        return {"on": "medium"}.get(effort, effort) if effort != "off" else None  # cannot be switched off
+    if kind == "toggle":
+        return effort != "off"
+    return None
+
+
+def _check_num_ctx(model: str, num_ctx: int | None) -> int | None:
+    if not num_ctx:
+        return None
+    max_ctx = _details(model)["max_context"]
+    if num_ctx < 512 or (max_ctx and num_ctx > max_ctx):
+        raise ValueError(
+            f"Context window must be from 512 to {max_ctx or 'the limit of the model'} tokens, got {num_ctx}"
+        )
+    return int(num_ctx)
 
 
 def _resolve_model(model: str | None) -> str:
@@ -254,11 +314,17 @@ def _format_history(history: List[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _options(num_ctx: int | None) -> dict[str, Any]:
+    # Both model calls of a question get the same num_ctx: Ollama reloads the model when it changes
+    return {"temperature": TEMPERATURE, **({"num_ctx": num_ctx} if num_ctx else {})}
+
+
 def _split_question(
     q: str,
     history: List[Dict[str, str]] | None = None,
     on_step: Callable[[str], None] | None = None,
     model: str = OLLAMA_MODEL,
+    num_ctx: int | None = None,
 ) -> List[str]:
     """Turn the user's message into standalone questions, one per topic.
 
@@ -290,9 +356,7 @@ def _split_question(
             content = q
         resp = client.chat(
             model=model,
-            options={
-                "temperature": TEMPERATURE,
-            },
+            options=_options(num_ctx),
             format=_SPLIT_SCHEMA,
             messages=[
                 {
@@ -322,12 +386,13 @@ def _generate_answer(
     context: str,
     question: str,
     model: str = OLLAMA_MODEL,
+    num_ctx: int | None = None,
+    think: bool | str | None = None,
 ) -> str:
     resp = client.chat(
         model=model,
-        options={
-            "temperature": TEMPERATURE,
-        },
+        options=_options(num_ctx),
+        **({"think": think} if think is not None else {}),
         messages=[
             {
                 "role": "system",
@@ -358,17 +423,22 @@ def ask_faq_core(
     history: List[Dict[str, str]] | None = None,
     on_step: Callable[[str], None] | None = None,
     model: str | None = None,
+    effort: str | None = None,
+    num_ctx: int | None = None,
 ) -> Dict[str, object]:
     """Answer a question from the FAQs. `model` overrides OLLAMA_MODEL for this call (it must be installed
-    in Ollama, otherwise ValueError). `on_step`, if given, is called with a short message before each
+    in Ollama, otherwise ValueError). `effort` (low/medium/high/on/off) sets the model's thinking for the
+    answer call only, if it can think. `num_ctx` sets the context window (tokens) of both model calls. `on_step`, if given, is called with a short message before each
     stage (the MCP tool turns these into progress notifications); it must not raise."""
     q: str = (question or "").strip()
     if not q:
         raise ValueError("question is required")
     chat_model: str = _resolve_model(model)
+    think = _think_param(chat_model, effort)
+    ctx_size = _check_num_ctx(chat_model, num_ctx)
 
     # top_k chunks for each sub-question; a chunk found by several of them is kept once
-    questions: List[str] = _split_question(q, history=history, on_step=on_step, model=chat_model)
+    questions: List[str] = _split_question(q, history=history, on_step=on_step, model=chat_model, num_ctx=ctx_size)
     if len(questions) > 1 or questions != [q]:
         log.info(msg=f"[split] {questions}")
     # With history, the user's message may be a follow-up that means nothing alone: answer the rewrite
@@ -403,13 +473,18 @@ def ask_faq_core(
             sources.append(h.payload["source"])
 
     if on_step:
-        on_step(f"Generating the answer with {chat_model}")
+        extras = [f"thinking {think}"] if think not in (None, False) else []
+        if ctx_size:
+            extras.append(f"context {ctx_size}")
+        on_step(f"Generating the answer with {chat_model}" + (f" ({', '.join(extras)})" if extras else ""))
     # No filenames in the context: the model cannot repeat what it never sees
     context: LiteralString = "\n\n---\n\n".join(h.payload["text"] for h in hits)
     answer: str = _generate_answer(
         context,
         question=standalone,
         model=chat_model,
+        num_ctx=ctx_size,
+        think=think,
     )
     if answer.strip() == NOT_FOUND:
         sources: List[str] = []  # nothing relevant was found, so do not cite files
