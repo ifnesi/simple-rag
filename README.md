@@ -31,7 +31,7 @@ ollama list
 docker-compose up --build
 ```
 
-Open **http://localhost:5000**, type a question and press Ask.
+Open **http://localhost:5050**, type a question and press Ask.
 
 Stop with `Ctrl+C`, or `docker-compose down` if you started it with `-d`. Stop the VM with `colima stop`. Docker Desktop works with the same commands, minus `colima start`.
 
@@ -110,7 +110,7 @@ src/
 | Service | Container | Command | Port | Notes |
 |---|---|---|---|---|
 | `mcp` | `faq-mcp` | `python mcp_server.py` | `127.0.0.1:8000` | Mounts `src/faqs` read-only and reads `src/.env` |
-| `web` | `faq-web` | gunicorn `app:app` | `127.0.0.1:5000` | `MCP_URL=http://mcp:8000/mcp`. No FAQ files, no Ollama access |
+| `web` | `faq-web` | gunicorn `app:app` | `127.0.0.1:5050` | `MCP_URL=http://mcp:8000/mcp`. No FAQ files, no Ollama access |
 | `inspector` | `faq-inspector` | `mcp-inspector --web` | `127.0.0.1:6274` | The official MCP Inspector image (`ghcr.io/modelcontextprotocol/inspector`, pinned to 2.14.0), pointed at `http://mcp:8000/mcp` |
 
 ## How it works
@@ -176,5 +176,5 @@ Checked on Colima (aarch64) with Ollama running on the host:
 - **The web page says the model was not found**: run `ollama pull <model>` for the `OLLAMA_MODEL` in `src/.env`.
 - **The web page says it could not reach the MCP server**: the `mcp` container is down or still starting. Check `docker-compose logs mcp`.
 - **FAQ changes are not showing up**: the files are loaded only at startup. Run `docker-compose restart mcp`.
-- **Port already in use**: change the left-hand side of `127.0.0.1:5000:5000` or `127.0.0.1:8000:8000` in `docker-compose.yml`.
+- **Port already in use**: change the left-hand side of `127.0.0.1:5050:5050` or `127.0.0.1:8000:8000` in `docker-compose.yml`.
 - **After changing `src/**/*.py`, `src/frontend` or `docs/`** (for example a new architecture diagram): rebuild with `docker-compose up --build`. The code and `docs/` are copied into the image, and only `src/faqs/` is mounted.

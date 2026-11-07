@@ -18,7 +18,7 @@ COPY src/ .
 # The web UI shows docs/system_architecture_diagram.png in a popup (served by app.py at /docs/...)
 COPY docs/ ./docs/
 
-EXPOSE 5000
+EXPOSE 5050
 
 # Default command = the web backend (the compose `mcp` service overrides it with mcp_server.py)
-CMD ["gunicorn", "-w", "1", "--threads", "4", "--timeout", "300", "-b", "0.0.0.0:5000", "app:app"]
+CMD ["gunicorn", "-w", "1", "--threads", "4", "--timeout", "300", "-b", "0.0.0.0:5050", "app:app"]

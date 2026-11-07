@@ -25,7 +25,7 @@ services:
     depends_on:
       - mcp
     ports:
-      - "127.0.0.1:5000:5000"
+      - "127.0.0.1:5050:5050"
     environment:
       MCP_URL: http://mcp:8000/mcp
 
