@@ -1,4 +1,6 @@
-from mcp.server.fastmcp import FastMCP
+import anyio
+
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from typing import Any, Dict, List, Optional
 
@@ -33,21 +35,43 @@ mcp: Any = FastMCP(
 
 
 @mcp.tool()
-def ask_faq(
+async def ask_faq(
+    ctx: Context,
     question: str,
     top_k: int = TOP_K_DEFAULT,
     history: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, object]:
     """Answer a question from the FAQ corpus. Returns the answer and the source files it came from.
     `history` is optional: earlier {"question", "answer"} pairs of the conversation, oldest first, used
-    only to understand follow-up questions."""
+    only to understand follow-up questions. While it works, the tool sends standard MCP progress
+    notifications (and log messages) describing each step, for clients that ask for them."""
     q: str = (question or "").strip()
     if not q:
         raise ValueError("`question` is required")
-    return ask_faq_core(
-        question=q,
-        top_k=top_k if top_k > 0 and top_k <= 10 else TOP_K_DEFAULT,
-        history=history,
+
+    steps = 0
+
+    async def _report(message: str) -> None:
+        nonlocal steps
+        steps += 1
+        try:
+            # notifications/progress only goes out if the client sent a progress token
+            await ctx.report_progress(progress=steps, total=None, message=message)
+            await ctx.info(message)
+        except Exception:
+            pass  # progress is best effort: it must never fail the answer
+
+    def on_step(message: str) -> None:
+        # ask_faq_core is blocking, so it runs in a worker thread; hop back to the event loop to notify
+        anyio.from_thread.run(_report, message)
+
+    return await anyio.to_thread.run_sync(
+        lambda: ask_faq_core(
+            question=q,
+            top_k=top_k if top_k > 0 and top_k <= 10 else TOP_K_DEFAULT,
+            history=history,
+            on_step=on_step,
+        )
     )
 
 

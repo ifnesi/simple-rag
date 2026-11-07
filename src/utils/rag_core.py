@@ -17,7 +17,7 @@ from logging import Logger, StreamHandler
 from pathlib import Path
 from qdrant_client import QdrantClient, models
 from re import Pattern
-from typing import Any, Dict, List, LiteralString, TextIO
+from typing import Any, Callable, Dict, List, LiteralString, TextIO
 from uuid import UUID
 
 # --- Config: every environment variable is read and validated in utils/__init__.py ---
@@ -229,6 +229,7 @@ def _format_history(history: List[Dict[str, str]]) -> str:
 def _split_question(
     q: str,
     history: List[Dict[str, str]] | None = None,
+    on_step: Callable[[str], None] | None = None,
 ) -> List[str]:
     """Turn the user's message into standalone questions, one per topic.
 
@@ -238,6 +239,8 @@ def _split_question(
     Returns [q] for a simple question without history, or if the model call fails."""
     if not history and not _COMPOUND_REGEX.search(q):
         return [q]
+    if on_step:
+        on_step("Understanding the question")
     try:
         if history:
             system: str = (
@@ -323,17 +326,23 @@ def ask_faq_core(
     question: str,
     top_k: int = TOP_K_DEFAULT,
     history: List[Dict[str, str]] | None = None,
+    on_step: Callable[[str], None] | None = None,
 ) -> Dict[str, object]:
+    """Answer a question from the FAQs. `on_step`, if given, is called with a short message before each
+    stage (the MCP tool turns these into progress notifications); it must not raise."""
     q: str = (question or "").strip()
     if not q:
         raise ValueError("question is required")
 
     # top_k chunks for each sub-question; a chunk found by several of them is kept once
-    questions: List[str] = _split_question(q, history=history)
+    questions: List[str] = _split_question(q, history=history, on_step=on_step)
     if len(questions) > 1 or questions != [q]:
         log.info(msg=f"[split] {questions}")
     # With history, the user's message may be a follow-up that means nothing alone: answer the rewrite
     standalone: str = " ".join(questions) if history else q
+    if on_step:
+        n: int = len(questions)
+        on_step("Searching the FAQs" + (f" ({n} questions: {' | '.join(questions)})" if n > 1 else ""))
     hits, seen = [], set()
     for sub in questions:
         for h in _qdrant.query_points(
@@ -353,11 +362,15 @@ def ask_faq_core(
             "sources": [],
         }
 
+    if on_step:
+        on_step(f"Found {len(hits)} relevant chunk{'s' if len(hits) != 1 else ''}")
     sources: List[str] = []
     for h in hits:
         if h.payload["source"] not in sources:
             sources.append(h.payload["source"])
 
+    if on_step:
+        on_step(f"Generating the answer with {OLLAMA_MODEL}")
     # No filenames in the context: the model cannot repeat what it never sees
     context: LiteralString = "\n\n---\n\n".join(h.payload["text"] for h in hits)
     answer: str = _generate_answer(

@@ -3,13 +3,15 @@
 import asyncio
 import json
 import logging
+import queue
 import re
 import threading
 import time
+
 from collections import OrderedDict, deque
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 from mcp import ClientSession
 from logging import Logger
 from mcp.client.streamable_http import streamable_http_client
@@ -72,11 +74,19 @@ def _remember(session_id: str | None, question: str, result: dict) -> None:
 async def _call_tool(
     name: str,
     args: dict,
+    on_progress: Any = None,
 ) -> Any:
+    async def _progress(progress: float, total: float | None, message: str | None) -> None:
+        if message and on_progress:
+            on_progress(message)
+
     async with streamable_http_client(MCP_URL) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            return await session.call_tool(name, args)
+            # progress_callback makes the SDK send a progress token, so the server reports its steps
+            return await session.call_tool(
+                name, args, progress_callback=_progress if on_progress else None
+            )
 
 
 async def _list_tools() -> list[Any]:
@@ -103,6 +113,7 @@ def ask_via_mcp(
     question: str,
     top_k: int,
     history: list[dict] | None = None,
+    on_progress: Any = None,
 ) -> dict:
     result: Any = asyncio.run(
         main=_call_tool(
@@ -112,6 +123,7 @@ def ask_via_mcp(
                 "top_k": top_k,
                 **({"history": history} if history else {}),
             },
+            on_progress=on_progress,
         )
     )
     text: LiteralString = "".join(getattr(c, "text", "") for c in result.content)
@@ -157,34 +169,55 @@ def ask() -> tuple[Any, Literal[400]] | Any | tuple[Any, Literal[502]]:
     except (TypeError, ValueError):
         top_k = TOP_K_DEFAULT
     session_id: str | None = _valid_session(data.get("session_id"))
-    try:
-        result: dict = ask_via_mcp(
-            question,
-            top_k=top_k,
-            history=_get_history(session_id),
+    history: list[dict] = _get_history(session_id)
+
+    if data.get("stream"):
+        return Response(
+            stream_with_context(_stream_answer(question, top_k, history, session_id)),
+            mimetype="application/x-ndjson",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+    try:
+        result: dict = ask_via_mcp(question, top_k=top_k, history=history)
         _remember(session_id, question, result)
         return jsonify(result)
     except ToolError as e:
         log.error(msg=f"ask_faq tool failed: {e}")
-        return (
-            jsonify(
-                {
-                    "error": _friendly(tool_error=str(e)),
-                }
-            ),
-            502,
-        )
+        return jsonify({"error": _friendly(tool_error=str(e))}), 502
     except Exception:
         log.exception(msg="ask via MCP failed")
-        return (
-            jsonify(
-                {
-                    "error": "could not get an answer from the MCP server",
-                }
-            ),
-            502,
-        )
+        return jsonify({"error": "could not get an answer from the MCP server"}), 502
+
+
+def _stream_answer(question: str, top_k: int, history: list[dict], session_id: str | None) -> Any:
+    """Yield one JSON object per line: {"type":"status","text"} for each step the MCP server reports,
+    then {"type":"result",...} or {"type":"error","error"}. The MCP call runs in a thread and hands its
+    events over through a queue."""
+    events: "queue.Queue[dict]" = queue.Queue()
+
+    def work() -> None:
+        try:
+            result = ask_via_mcp(
+                question,
+                top_k=top_k,
+                history=history,
+                on_progress=lambda m: events.put({"type": "status", "text": m}),
+            )
+            _remember(session_id, question, result)
+            events.put({"type": "result", **result})
+        except ToolError as e:
+            log.error(msg=f"ask_faq tool failed: {e}")
+            events.put({"type": "error", "error": _friendly(tool_error=str(e))})
+        except Exception:
+            log.exception(msg="ask via MCP failed")
+            events.put({"type": "error", "error": "could not get an answer from the MCP server"})
+
+    threading.Thread(target=work, daemon=True).start()
+    while True:
+        event = events.get()
+        yield json.dumps(event) + "\n"
+        if event["type"] != "status":
+            return
 
 
 @app.get("/api/health")

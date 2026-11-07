@@ -88,6 +88,10 @@
     .src { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px;
            font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); }
 
+    .steps { margin-top: 10px; font-size: .8rem; color: var(--muted); }
+    .steps summary { cursor: pointer; user-select: none; }
+    .steps ol { margin: 6px 0 0; padding-left: 20px; }
+    .status { margin-left: 8px; font-size: .85rem; color: var(--muted); vertical-align: middle; }
     .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
     .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite ease-in-out; }
     .typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
@@ -137,6 +141,12 @@
           <div className="avatar">✦</div>
           <div className={"bubble" + (m.error ? " error" : "")}>
             {m.error ? m.text : <Markdown text={m.text} />}
+            {m.steps && m.steps.length > 0 && (
+              <details className="steps">
+                <summary>Steps ({m.steps.length})</summary>
+                <ol>{m.steps.map((t, i) => <li key={i}>{t}</li>)}</ol>
+              </details>
+            )}
             {m.sources && m.sources.length > 0 && (
               <div className="sources">
                 Sources {m.sources.map(s => <span className="src" key={s}>{s}</span>)}
@@ -161,6 +171,7 @@
       const [question, setQuestion] = useState("");
       const [topK, setTopK] = useState(4);
       const [loading, setLoading] = useState(false);
+      const [steps, setSteps] = useState([]);  // what the backend reports while a question is running
       const [mcp, setMcp] = useState("checking");
       const endRef = useRef(null);
       const [showDiagram, setShowDiagram] = useState(false);
@@ -189,20 +200,44 @@
         const q = text.trim();
         if (!q || loading) return;
         setMessages(m => [...m, { role: "user", text: q }]);
-        setQuestion(""); setLoading(true);
+        setQuestion(""); setLoading(true); setSteps([]);
+        const seen = [];
         try {
           const r = await fetch("/api/ask", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: q, top_k: topK, session_id: sessionId.current }),
+            body: JSON.stringify({ question: q, top_k: topK, session_id: sessionId.current, stream: true }),
           });
-          const data = await r.json();
-          if (!r.ok) throw new Error(data.error || "Request failed");
-          setMessages(m => [...m, { role: "assistant", text: data.answer, sources: data.sources }]);
+          if (!r.ok) {
+            const data = await r.json().catch(() => ({}));
+            throw new Error(data.error || "Request failed");
+          }
+          // One JSON object per line: status updates, then the result (or an error)
+          const reader = r.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = "", result = null;
+          const handle = line => {
+            if (!line.trim()) return;
+            const ev = JSON.parse(line);
+            if (ev.type === "status") { seen.push(ev.text); setSteps([...seen]); }
+            else if (ev.type === "error") throw new Error(ev.error);
+            else if (ev.type === "result") result = ev;
+          };
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split("\n");
+            buf = lines.pop();
+            lines.forEach(handle);
+          }
+          handle(buf);
+          if (!result) throw new Error("No answer received");
+          setMessages(m => [...m, { role: "assistant", text: result.answer, sources: result.sources, steps: seen }]);
         } catch (err) {
           setMessages(m => [...m, { role: "assistant", text: err.message, error: true }]);
         } finally {
-          setLoading(false);
+          setLoading(false); setSteps([]);
         }
       }
 
@@ -252,7 +287,10 @@
             {loading && (
               <div className="row assistant">
                 <div className="avatar">✦</div>
-                <div className="bubble"><span className="typing"><i /><i /><i /></span></div>
+                <div className="bubble">
+                  <span className="typing"><i /><i /><i /></span>
+                  {steps.length > 0 && <span className="status">{steps[steps.length - 1]}…</span>}
+                </div>
               </div>
             )}
             <div ref={endRef} />

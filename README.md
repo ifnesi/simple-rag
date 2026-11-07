@@ -36,7 +36,7 @@ Open **http://localhost:5050**, type a question and press Ask.
 Stop with `Ctrl+C`, or `docker-compose down` if you started it with `-d`. Stop the VM with `colima stop`. Docker Desktop works with the same commands, minus `colima start`.
 
 ## Configuration: `src/.env`
-There are no secrets, so `src/.env` is a normal committed file that docker-compose loads into the `mcp` container. The two settings you will change are:
+There are no secrets, so `src/.env` is a normal committed file that docker-compose loads into the `mcp` and `web` containers (`web` needs `CHAT_HISTORY_TURNS`). The two settings you will change are:
 
 | Variable | Meaning |
 |---|---|
@@ -47,7 +47,7 @@ Other optional variables, all with defaults in the code: `OLLAMA_TIMEOUT` (secon
 
 All variables are read in one place, `src/utils/__init__.py`, and the other modules import them from there (`from utils import OLLAMA_URL`). The same file validates them, so a bad value stops the container at startup with a clear message (visible in `docker-compose logs mcp`) instead of failing later. The rules: `OLLAMA_URL` and `MCP_URL` must start with `http://` or `https://`; `OLLAMA_MODEL` and `EMBED_MODEL` must not be empty; `OLLAMA_TIMEOUT` above 0; `TEMPERATURE` 0 to 2; `CHUNK_SIZE` at least 50; `CHUNK_OVERLAP` 0 up to below `CHUNK_SIZE`; `TOP_K_DEFAULT` 1 to 10; `CHAT_HISTORY_TURNS` 0 to 10; `MIN_SCORE` 0 to 1; `MCP_TRANSPORT` `stdio` or `streamable-http`; `MCP_PORT` 1 to 65535. A number that is not a number fails with Python's own error, such as `invalid literal for int()`. The FAQ directory is checked when the files are loaded (not at import, because the web container has no FAQ files).
 
-After changing `src/.env`, recreate the container so it is re-read: `docker-compose up -d --force-recreate mcp` (a plain `restart` does not reload it). Changing `EMBED_MODEL` also needs a rebuild, because the model is baked into the image: `docker-compose build --build-arg EMBED_MODEL=<name>`.
+After changing `src/.env`, recreate the container so it is re-read: `docker-compose up -d --force-recreate mcp web` (a plain `restart` does not reload it). Changing `EMBED_MODEL` also needs a rebuild, because the model is baked into the image: `docker-compose build --build-arg EMBED_MODEL=<name>`.
 
 ## Updating the FAQs
 `src/faqs/` is mounted read-only into the `mcp` container and loaded once at startup. After adding, editing or deleting a file, reload with:
@@ -125,9 +125,9 @@ The same file name and chunk index always give the same ID, on every start and m
 
 ### Answering a question
 1. Validate `question` (non-empty) and `top_k` (1–10, otherwise 4).
-2. If the question looks compound (it contains "and", "also", a comma, several question marks, …), ask the Ollama model to split it into separate questions, for example "how to request PTOs and reset my password" becomes "how to request PTOs" and "reset my password". Simple questions skip this step. One embedding of a two-topic question lands between the topics and retrieves neither well, so each part is searched on its own. If the split fails, the question is searched as is, with a warning in the log.
+2. If the chat has earlier turns (see [Chat memory](#chat-memory-follow-up-questions)), the model first rewrites the message into standalone questions, resolving references like "it" or "and for contractors?". Otherwise, if the question looks compound (it contains "and", "also", a comma, several question marks, …), ask the Ollama model to split it into separate questions, for example "how to request PTOs and reset my password" becomes "how to request PTOs" and "reset my password". Simple questions skip this step. One embedding of a two-topic question lands between the topics and retrieves neither well, so each part is searched on its own. If the split or rewrite fails, the question is searched as is, with a warning in the log.
 3. Embed each question (`query_embed`) and take the top `top_k` chunks for it by cosine similarity from Qdrant, keeping only chunks that score at least `MIN_SCORE` (Qdrant's `score_threshold`). A chunk found by several sub-questions is kept once, so a compound question can use more than `top_k` chunks in total, and a weak match can leave fewer than `top_k`.
-4. Join the retrieved chunks into the context (without filenames) and ask the Ollama model (temperature 0 by default) to answer only from it: start with the direct answer, stay concise, answer every part of a multi-part question, never mention documents or files, and reply in Markdown. If the context has nothing relevant, the model must reply with a fixed message ("I couldn't find any information about that in the FAQs. Please try rephrasing your question."). For a multi-part question, a part that is not covered gets "I couldn't find information about … in the FAQs." The filenames are returned separately in `sources` and shown by the UI.
+4. Join the retrieved chunks into the context (without filenames) and ask (with the rewritten question when there is history) the Ollama model (temperature 0 by default) to answer only from it: start with the direct answer, stay concise, answer every part of a multi-part question, never mention documents or files, and reply in Markdown. If the context has nothing relevant, the model must reply with a fixed message ("I couldn't find any information about that in the FAQs. Please try rephrasing your question."). For a multi-part question, a part that is not covered gets "I couldn't find information about … in the FAQs." The filenames are returned separately in `sources` and shown by the UI.
 5. `sources` are the distinct filenames of the retrieved chunks, in rank order. With `top_k=1` and a simple question there is exactly one source. When the answer is the fixed "couldn't find" message, `sources` is empty.
 6. If no chunk reaches `MIN_SCORE`, the fixed "couldn't find" message is returned straight away with no sources, **without calling the model** (about 0.05 s instead of 2 to 3 s). If nothing is loaded at all: `{"answer": "No FAQ content is loaded.", "sources": []}`.
 
@@ -137,7 +137,8 @@ At startup the server checks that Ollama is reachable and the model is pulled, a
 
 ### MCP server
 - Transport from `MCP_TRANSPORT`: `stdio` (default, as `instructions.txt` requires) or `streamable-http` on `MCP_HOST:MCP_PORT`, endpoint `/mcp`.
-- HTTP mode is stateless. The web backend opens a fresh client per request, and stateful sessions logged a long `ClosedResourceError` traceback for each one.
+- HTTP mode is stateless. The web backend opens a fresh client per request, and stateful sessions logged a long `ClosedResourceError` traceback for each one. Chat memory therefore lives in the web backend, not here.
+- `ask_faq` sends progress notifications while it works (see [Progress steps](#progress-steps)).
 - DNS-rebinding protection stays on, with an allowlist for `localhost`, `127.0.0.1` and `mcp`.
 - All logging goes to stderr, since stdio uses stdout for the protocol.
 - `mcp` is pinned `<2` in `src/requirements.txt`: mcp 2.x renamed `FastMCP` and would break the starter code.
@@ -146,13 +147,27 @@ At startup the server checks that Ollama is reachable and the model is pulled, a
 | Route | Behavior |
 |---|---|
 | `GET /` | the React page |
-| `POST /api/ask` | `{"question", "top_k"?, "session_id"?}` → calls `ask_faq` through MCP → `{"answer", "sources"}`. The `top_k` sent by the UI's selector overrides `TOP_K_DEFAULT`; if it is missing or not a number the default is used, and a number outside 1–10 falls back to the default in the MCP tool. `400` for an empty question, `502` if the MCP call fails (with a readable message for "cannot reach Ollama" and "model not found") |
+| `POST /api/ask` | `{"question", "top_k"?, "session_id"?}` → calls `ask_faq` through MCP → `{"answer", "sources"}`. With `"stream": true` the reply is newline-delimited JSON with a status line per step (see [Progress steps](#progress-steps)). `session_id` enables [chat memory](#chat-memory-follow-up-questions). The `top_k` sent by the UI's selector overrides `TOP_K_DEFAULT`; if it is missing or not a number the default is used, and a number outside 1–10 falls back to the default in the MCP tool. `400` for an empty question, `502` if the MCP call fails (with a readable message for "cannot reach Ollama" and "model not found") |
 | `GET /api/health` | lists the MCP server's tools, `503` if unreachable |
 | `GET /docs/<file>` | files from `docs/`, which the Dockerfile copies into the web image; the UI uses it for the architecture diagram. Paths that try to leave the folder return `404` |
 
-The UI is a single `index.html` with React, `marked` and `DOMPurify` from a CDN (no build step, so it needs internet once for the scripts). It is a full-width, chat-style page: conversation history, clickable example questions on the empty state, a typing indicator, answers rendered from Markdown to sanitized HTML, source filenames as chips under each answer, a `top_k` selector, a Clear button, and a badge that shows whether the backend can reach the MCP server. When it can, the badge reads "MCP connected ↗" and opens the MCP Inspector (port 6274 of the same host) in a new tab. An **Architecture diagram** button to the right of that badge opens a popup with `docs/system_architecture_diagram.png`; Esc, the ✕ button or a click outside the popup closes it, and "Open full size" shows the image in a new tab. The button works even when the MCP server is down. It follows the system light or dark theme and works on narrow screens.
+The UI is a single `index.html` with React, `marked` and `DOMPurify` from a CDN (no build step, so it needs internet once for the scripts). It is a full-width, chat-style page: conversation history, clickable example questions on the empty state, a typing indicator with the current step, a collapsed **Steps** list under each answer, answers rendered from Markdown to sanitized HTML, source filenames as chips under each answer, a `top_k` selector, a Clear button (which also starts a new chat memory), and a badge that shows whether the backend can reach the MCP server. When it can, the badge reads "MCP connected ↗" and opens the MCP Inspector (port 6274 of the same host) in a new tab. An **Architecture diagram** button to the right of that badge opens a popup with `docs/system_architecture_diagram.png`; Esc, the ✕ button or a click outside the popup closes it, and "Open full size" shows the image in a new tab. The button works even when the MCP server is down. It follows the system light or dark theme and works on narrow screens.
+
+### Chat memory (follow-up questions)
+
+The web UI generates a random `session_id` when the page loads (and a new one when you click **Clear**) and sends it with every `/api/ask` request. The Flask backend keeps the last `CHAT_HISTORY_TURNS` question/answer pairs of each session in memory (sessions expire after 1 hour, at most 500 are kept; everything is lost on restart and not shared between workers) and passes them to the `ask_faq` tool as the optional `history` argument.
+
+The history is used only to rewrite the question, not to answer it: when history exists, the model turns the latest message into standalone questions ("and for contractors?" becomes "How do I request PTO as a contractor?"), retrieval runs on those, and the answer is generated from the retrieved FAQ text only. Answers without sources (the "couldn't find" message) are not remembered. With history, every request makes the extra rewrite call to the model. Without a `session_id`, or with `CHAT_HISTORY_TURNS=0`, each question is independent, as before. The web container reads `src/.env` as well, because it owns the memory.
+
+### Progress steps
+
+`ask_faq` reports what it is doing with standard MCP notifications, so any client can show them, not only the web page: `notifications/progress` (a counter plus a message such as "Understanding the question", "Searching the FAQs", "Found 3 relevant chunks", "Generating the answer with <model>"; sent only when the client supplies a progress token) and `notifications/message` log entries with the same text. The tool's input and output are unchanged, and clients that ignore notifications are unaffected.
+
+The web backend asks for them: `POST /api/ask` with `"stream": true` returns newline-delimited JSON (`application/x-ndjson`): `{"type":"status","text":...}` for each step, then `{"type":"result","answer":...,"sources":[...]}` or `{"type":"error","error":...}`. Without `stream` the endpoint returns plain JSON as before. The UI shows the latest step next to the typing indicator and keeps the full list under each answer as a collapsed **Steps** section. This needs `mcp>=1.10` (rebuild the image after pulling).
 
 ## Verification status
+The checks below were made before chat memory and progress steps were added; those two features have not been run end to end yet.
+
 Checked on Colima (aarch64) with Ollama running on the host:
 - The image builds with the embedding model baked in, and `web` reaches the MCP server over HTTP and sees exactly one tool, `ask_faq`.
 - A question asked through the web API returned a real answer from the Ollama model (`gemma4:e4b-mlx`) with its sources, so the full path `web → MCP → Qdrant → Ollama` works. The container reaches the host's Ollama through `host.docker.internal`.
@@ -165,7 +180,7 @@ Checked on Colima (aarch64) with Ollama running on the host:
 - The FAQ content is consistent: no duplicate questions, and the numbers I cross-checked (password length, lockout, SSO session length, certificate validity, 401(k) match, holidays, parental leave, notice period) agree with each other.
 - The Inspector UI and the web page both answer with HTTP 200, and the container logs show no errors.
 
-**Known limitation:** the `ask_faq` tool runs synchronously, so while one answer is being generated the server handles other requests, including the health check behind the "MCP connected" badge, only after it finishes. In a test the health check waited about 2 seconds during a 4-second answer. With a much slower model the badge could briefly show "MCP unreachable".
+**Known limitation (measured before `ask_faq` moved to a worker thread to send progress notifications; not re-measured since):** the `ask_faq` tool ran synchronously, so while one answer was being generated the server handled other requests, including the health check behind the "MCP connected" badge, only after it finished. In a test the health check waited about 2 seconds during a 4-second answer. With a much slower model the badge could briefly have shown "MCP unreachable".
 
 ## Troubleshooting
 - **`error getting credentials … docker-credential-desktop: executable file not found`** (during `docker-compose up --build` with Colima): your `~/.docker/config.json` still points at Docker Desktop's credential helper. Delete the line `"credsStore": "desktop"` from that file.
@@ -178,9 +193,3 @@ Checked on Colima (aarch64) with Ollama running on the host:
 - **FAQ changes are not showing up**: the files are loaded only at startup. Run `docker-compose restart mcp`.
 - **Port already in use**: change the left-hand side of `127.0.0.1:5050:5050` or `127.0.0.1:8000:8000` in `docker-compose.yml`.
 - **After changing `src/**/*.py`, `src/frontend` or `docs/`** (for example a new architecture diagram): rebuild with `docker-compose up --build`. The code and `docs/` are copied into the image, and only `src/faqs/` is mounted.
-
-## Chat memory (follow-up questions)
-
-The web UI generates a random `session_id` when the page loads (and a new one when you click **Clear**) and sends it with every `/api/ask` request. The Flask backend keeps the last `CHAT_HISTORY_TURNS` question/answer pairs of each session in memory (sessions expire after 1 hour, at most 500 are kept; everything is lost on restart and not shared between workers) and passes them to the `ask_faq` tool as the optional `history` argument.
-
-The history is used only to rewrite the question, not to answer it: when history exists, the model turns the latest message into standalone questions ("and for contractors?" becomes "How do I request PTO as a contractor?"), retrieval runs on those, and the answer is generated from the retrieved FAQ text only. Answers without sources (the "couldn't find" message) are not remembered. With history, every request makes the extra rewrite call to the model. Without a `session_id`, or with `CHAT_HISTORY_TURNS=0`, each question is independent, as before. The web container reads `src/.env` as well, because it owns the memory.
